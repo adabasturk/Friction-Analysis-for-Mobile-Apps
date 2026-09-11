@@ -1,16 +1,30 @@
 [
   {
-    "name": "REPLACE_WITH_APP_NAME",
-    "app_id": null,
+    "name": "Chat AI: Ask Agent Anything",
+    "app_id": "1668787639",
     "studio": "Codeway",
-    "vertical": "REPLACE_WITH_VERTICAL",
-    "pair_id": "pair_01"
+    "vertical": "ai_chatbot",
+    "pair_id": "chatbot"
   },
   {
-    "name": "REPLACE_WITH_APP_NAME",
-    "app_id": null,
+    "name": "AI Chatbot - Nova",
+    "app_id": "1669007652",
     "studio": "HubX",
-    "vertical": "REPLACE_WITH_VERTICAL",
-    "pair_id": "pair_01"
+    "vertical": "ai_chatbot",
+    "pair_id": "chatbot"
+  },
+  {
+    "name": "Retake AI Face & Selfie Editor",
+    "app_id": "6466298983",
+    "studio": "Codeway",
+    "vertical": "face_editor",
+    "pair_id": "face"
+  },
+  {
+    "name": "ReShoot: AI Face Photo Editor",
+    "app_id": "6751296351",
+    "studio": "HubX",
+    "vertical": "face_editor",
+    "pair_id": "face"
   }
 ]
