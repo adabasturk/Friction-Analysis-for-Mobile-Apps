@@ -1,0 +1,5 @@
+requests
+ollama
+pandas
+matplotlib
+tqdm
