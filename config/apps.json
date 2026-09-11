@@ -1,0 +1,16 @@
+[
+  {
+    "name": "REPLACE_WITH_APP_NAME",
+    "app_id": null,
+    "studio": "Codeway",
+    "vertical": "REPLACE_WITH_VERTICAL",
+    "pair_id": "pair_01"
+  },
+  {
+    "name": "REPLACE_WITH_APP_NAME",
+    "app_id": null,
+    "studio": "HubX",
+    "vertical": "REPLACE_WITH_VERTICAL",
+    "pair_id": "pair_01"
+  }
+]
