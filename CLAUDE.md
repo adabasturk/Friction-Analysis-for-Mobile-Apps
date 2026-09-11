@@ -10,6 +10,26 @@ A/B test hypotheses.
 This is a portfolio project. The defensibility of the findings matters as much as
 the quality of the code.
 
+## App set
+
+Two matched pairs, four apps total. No control apps.
+
+- **chatbot**: Chat AI (Codeway, app_id 1668787639) vs Nova (HubX, app_id 1669007652)
+- **face**: Retake AI (Codeway, app_id 6466298983) vs ReShoot (HubX, app_id 6751296351)
+
+### Temporal comparability
+
+The RSS feed returns up to 500 reviews per app per country, but the time window
+those 500 reviews span varies with how fast an app collects reviews (measured
+range across candidates: 14 to 1255 days). Pairs whose windows differ by more
+than 3x are not comparable — this is why a third pair (education) was dropped
+from the study. The two pairs above measure 1.05x and 2.3x, so no clipping is
+needed.
+
+Never use App Store `userRatingCount` as a measure of current review activity —
+it is cumulative over the app's entire lifetime. Use reviews-per-day computed
+from the collected sample instead.
+
 ## Hardware constraints — base every technical decision on these
 
 - Intel MacBook Pro 2020, 1.4 GHz i5, 8 GB RAM
