@@ -30,7 +30,7 @@ REVIEWS_URL_TEMPLATE = (
 MAX_PAGES = 10
 RAW_DIR = Path("data/raw")
 
-DEFAULT_COUNTRIES = ["us", "gb", "tr", "de", "fr", "ca", "au", "in", "br", "mx"]
+DEFAULT_COUNTRIES = ["us", "gb", "de", "tr", "br", "in", "fr", "jp"]
 
 
 def slugify(name):

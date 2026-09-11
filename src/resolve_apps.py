@@ -21,10 +21,11 @@ import requests
 LOOKUP_URL = "https://itunes.apple.com/lookup"
 SEARCH_URL = "https://itunes.apple.com/search"
 
-# Known publisher (artist) IDs.
+# Known publisher (artist) IDs. A studio can own more than one publisher
+# account; list all of them under the studio name they should be grouped as.
 PUBLISHERS = {
-    "Codeway": "1503508447",
-    "HubX": "1619331387",
+    "Codeway": ["1503508447", "1833881740"],
+    "HubX": ["1619331387", "1590841932"],
 }
 
 PORTFOLIO_FIELDS = [
@@ -85,24 +86,25 @@ def search_apps(term, country="us"):
 
 def build_portfolio(country):
     rows = []
-    for studio, artist_id in PUBLISHERS.items():
-        apps = fetch_publisher_apps(artist_id, country=country)
-        print(f"{studio} (artistId={artist_id}): {len(apps)} apps")
-        for app in apps:
-            rows.append(
-                {
-                    "trackId": app.get("trackId"),
-                    "trackName": app.get("trackName"),
-                    "primaryGenreName": app.get("primaryGenreName"),
-                    "userRatingCount": app.get("userRatingCount") or 0,
-                    "averageUserRating": app.get("averageUserRating"),
-                    "price": app.get("price"),
-                    "releaseDate": app.get("releaseDate"),
-                    "studio": studio,
-                    "artistId": artist_id,
-                }
-            )
-        time.sleep(1)
+    for studio, artist_ids in PUBLISHERS.items():
+        for artist_id in artist_ids:
+            apps = fetch_publisher_apps(artist_id, country=country)
+            print(f"{studio} (artistId={artist_id}): {len(apps)} apps")
+            for app in apps:
+                rows.append(
+                    {
+                        "trackId": app.get("trackId"),
+                        "trackName": app.get("trackName"),
+                        "primaryGenreName": app.get("primaryGenreName"),
+                        "userRatingCount": app.get("userRatingCount") or 0,
+                        "averageUserRating": app.get("averageUserRating"),
+                        "price": app.get("price"),
+                        "releaseDate": app.get("releaseDate"),
+                        "studio": studio,
+                        "artistId": artist_id,
+                    }
+                )
+            time.sleep(1)
 
     rows.sort(key=lambda r: r["userRatingCount"], reverse=True)
     return rows
