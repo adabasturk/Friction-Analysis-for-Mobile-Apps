@@ -3,3 +3,5 @@ ollama
 pandas
 matplotlib
 tqdm
+scikit-learn
+numpy
