@@ -69,7 +69,7 @@ k=12 ile:
 - **Küme 5 (n=630, ort. puan 1.60)** — altın madeni. Ücretsiz deneme tuzağı, iptal edememe, haftalık 9.99£ şikâyetleri.
 - **Küme 10 (n=367, %88 yüz editörü)** — Retake + ReShoot'un kendi kümesi, sonuç kalitesi üzerine.
 - **Kümeler 1, 7, 9, 11 (~2.000)** — kısa İngilizce övgü, "very helpful" tarzı.
-- **Küme 6 (n=669)** — klavye ezmesi ("Ggshsjsjsjjdjddndjjd"). 10 karakter filtresini geçmiş, içerik sıfır. Filtre sıkılaştırılacak.
+- **Küme 6 (n=669)** — kısa ve çok dilli yorumlar. Konu benzerliğinden değil biçim benzerliğinden bir araya gelmiş. İçinde gerçek free_quota_limit ve quality_gap şikâyetleri var ("3 messages? Are you kidding!"). Klavye ezmesi 6961 kaydın sadece 9'u; küme topluca elenmeyecek.
 
 ---
 
@@ -121,7 +121,7 @@ olduğu için popülasyondan tamamen düşer, örneklemeye hiç girmez.
 ```json
 {
   "friction_type": "paywall_timing | price_level | subscription_trap | free_quota_limit | referral_gate | quality_gap | onboarding_confusion | performance | none",
-  "trigger_moment": "before_first_use | after_first_result | after_free_quota | at_export | unclear",
+  "trigger_moment": "before_first_use | after_first_result | after_free_quota | at_export | unclear | none",
   "mentions_price": true,
   "price_mentioned": "9.99/week | null",
   "paid_but_still_limited": false,

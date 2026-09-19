@@ -8,9 +8,17 @@ count, average rating, per-app composition (so a cluster that's really
 just one app dominating is visible), and the 5 reviews closest to the
 centroid.
 
+With --k 12 --save: also writes the fitted labels to reviews.cluster_id
+(adding that column if it doesn't exist yet) and checks the result against
+the k=12 cluster sizes recorded in PLAN.md (cluster 5=630, 6=669, 10=367).
+This is the settled k for the project (src/sample.py reads cluster_id from
+this column) — --save is gated to avoid an exploratory run at a different
+k silently overwriting it.
+
 Usage:
     python src/cluster.py                # silhouette table only
     python src/cluster.py --k 12         # full per-cluster report
+    python src/cluster.py --k 12 --save  # + persist cluster_id to reviews
 """
 
 import argparse
@@ -27,6 +35,10 @@ CANDIDATE_KS = [8, 12, 16, 20]
 SILHOUETTE_SAMPLE = 3000
 RANDOM_STATE = 42
 CLOSEST_N = 5
+
+# From PLAN.md's k=12 report. Checked after --save so a bad run (stale
+# embeddings, a different sklearn version) doesn't go unnoticed.
+EXPECTED_CLUSTER_SIZES = {5: 630, 6: 669, 10: 367}
 
 
 def load_embeddings(conn):
@@ -97,6 +109,46 @@ def print_cluster_report(X, k, apps, ratings, bodies):
             snippet = textwrap.shorten(bodies[i] or "", width=100, placeholder="...")
             print(f"    [{apps[i]}, rating={ratings[i]}] {snippet}")
 
+    return labels
+
+
+def ensure_cluster_column(conn):
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(reviews)")}
+    if "cluster_id" not in cols:
+        conn.execute("ALTER TABLE reviews ADD COLUMN cluster_id INTEGER")
+        conn.commit()
+        print("added reviews.cluster_id column")
+
+
+def save_cluster_ids(conn, review_ids, labels):
+    """Idempotent: re-running with the same fit writes the same values."""
+    ensure_cluster_column(conn)
+    conn.executemany(
+        "UPDATE reviews SET cluster_id = ? WHERE review_id = ?",
+        [(int(label), review_id) for review_id, label in zip(review_ids, labels)],
+    )
+    conn.commit()
+    print(f"saved cluster_id for {len(review_ids)} reviews")
+
+
+def verify_cluster_sizes(conn):
+    print("\ncluster size check against PLAN.md's k=12 report:")
+    mismatch = False
+    for cluster_id, expected in EXPECTED_CLUSTER_SIZES.items():
+        actual = conn.execute(
+            "SELECT COUNT(*) FROM reviews WHERE cluster_id = ?", (cluster_id,)
+        ).fetchone()[0]
+        ok = actual == expected
+        mismatch = mismatch or not ok
+        flag = "" if ok else "  <-- MISMATCH"
+        print(f"  cluster {cluster_id}: expected {expected}, got {actual}{flag}")
+    if mismatch:
+        print(
+            "\nWARNING: saved cluster sizes don't match the expected k=12 report — "
+            "check embeddings/sklearn version before trusting anything downstream "
+            "that reads reviews.cluster_id"
+        )
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -107,11 +159,18 @@ def main():
         default=None,
         help="cluster count for the full report; omit to see the silhouette table",
     )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="persist cluster_id to reviews (requires --k; use the settled k=12)",
+    )
     args = parser.parse_args()
+
+    if args.save and args.k is None:
+        parser.error("--save requires --k")
 
     conn = get_connection(args.db)
     review_ids, vectors, apps, ratings, bodies = load_embeddings(conn)
-    conn.close()
 
     X = normalize(vectors)  # unit-normalize so Euclidean KMeans behaves like cosine
 
@@ -120,7 +179,12 @@ def main():
     if args.k is None:
         print_silhouette_table(X)
     else:
-        print_cluster_report(X, args.k, apps, ratings, bodies)
+        labels = print_cluster_report(X, args.k, apps, ratings, bodies)
+        if args.save:
+            save_cluster_ids(conn, review_ids, labels)
+            verify_cluster_sizes(conn)
+
+    conn.close()
 
 
 if __name__ == "__main__":
