@@ -153,8 +153,12 @@ SCHEMA_TEXT = f"""Database: SQLite, two relevant tables.
 
 TABLE reviews — every collected review (9,432 rows), not just the sampled ones.
   review_id TEXT PRIMARY KEY
-  app TEXT      -- one of: 'Chat AI: Ask Agent Anything', 'AI Chatbot - Nova',
-                 --         'Retake AI Face & Selfie Editor', 'ReShoot: AI Face Photo Editor'
+  app TEXT      -- EXACTLY one of these four full strings - never shorten or
+                 -- abbreviate one (not "Retake AI", not "Nova" alone):
+                 --   'Chat AI: Ask Agent Anything'
+                 --   'AI Chatbot - Nova'
+                 --   'Retake AI Face & Selfie Editor'
+                 --   'ReShoot: AI Face Photo Editor'
   studio TEXT   -- 'Codeway' or 'HubX'
   vertical TEXT -- 'ai_chatbot' or 'face_editor'
   pair_id TEXT  -- 'chatbot' or 'face' (matched-pair key)
@@ -193,10 +197,21 @@ those.
                                -- validation and was not trusted)
 
 RULE - raw counts vs rates, this distinction matters:
-  A raw count ("how many reviews", "cluster size", "how many 1-star reviews")
-  runs over the FULL population (reviews, or extractions unfiltered) with NO
-  in_estimation_frame filter and NO selection_weight. Frame filtering only
-  applies to RATES/PERCENTAGES.
+  A raw count ("how many reviews", "how many reviews from country X", "how
+  many 1-star reviews") runs over the FULL population and reads from
+  reviews ONLY - no JOIN to extractions at all. extractions only has the
+  ~1,035 sampled rows, so joining it into a count silently shrinks the
+  population and the count comes out wrong (measured: "how many reviews
+  from Germany" returned 113 with an extractions JOIN instead of the
+  correct ~800 from reviews alone). JOIN extractions ONLY when the query
+  actually reads one of ITS OWN columns (friction_type, would_pay_signal,
+  in_estimation_frame, selection_weight, etc.) - never join it just because
+  a query filters by app/country/rating, since those columns live on
+  reviews regardless.
+
+  Example - a raw count filtered by country, reviews only, no join:
+
+    SELECT COUNT(*) FROM reviews WHERE country = 'de';
 
   A rate or percentage ("what fraction", "what percent", "rate of X") MUST
   read from extractions, MUST filter WHERE in_estimation_frame = 1, and MUST
@@ -288,17 +303,32 @@ Output ONLY corrected JSON: {{"sql": "<a single SELECT statement, no trailing se
 JSON:"""
 
 QUALITATIVE_SYNTH_TEMPLATE = """Below are up to {k} real app store reviews retrieved for a question. \
-Answer the question using ONLY what these reviews say. Cite the review_id in \
-brackets after every claim you make, e.g. [123456789]. If these reviews don't \
-actually address the question, say so plainly instead of guessing. Never \
-invent facts, numbers, or reviews beyond what's given below.
+Answer the question using ONLY what these reviews say. When a claim comes from \
+a specific review, say which app that review is about (e.g. "a Nova user \
+says...", "in a Chat AI review...") instead of citing an ID or number. Never \
+write a bracketed identifier, a review number, or anything like [12345] - app \
+names are how a claim is attributed here. If these reviews don't actually \
+address the question, say so plainly instead of guessing. Never invent facts, \
+numbers, or reviews beyond what's given below.
+
+Write your answer in the SAME LANGUAGE as the question. When you quote a \
+review that is in a different language than the question, either quote it \
+ENTIRELY in its original language, or translate it ENTIRELY - never mix the \
+two within one quote (e.g. do not leave one word or phrase untranslated \
+inside an otherwise-translated sentence).
+
+Never use a vague-majority word ("many", "most", "often", or equivalents in \
+the question's language) unless at least THREE of the reviews given below \
+literally support that claim. If only one review supports a claim, say "a \
+user" (in the question's language); if two, say "two users"; only at three \
+or more, say "many"/"most"/"often".
 
 Reviews:
 {context}
 
 Question: \"\"\"{question}\"\"\"
 
-Answer (with [review_id] citations):"""
+Answer (attribute claims by app name, never by ID, in the question's language):"""
 
 # Mechanical country -> language mapping, used only when a country filter is
 # active: lowering the similarity threshold (MIN_TOP1_SIMILARITY_COUNTRY_
@@ -350,6 +380,114 @@ def translate_query(question, language, host):
     return call_ollama_text(prompt, host, num_predict=120).strip()
 
 
+# When no country is named, a question still gets embedded only once, in
+# whatever language it was typed in - and nomic-embed-text's language-first
+# encoding means it then only ever reaches reviews in that same language
+# (measured: a Turkish question with no country name scored 100% tr in its
+# top 15, regardless of topic). Fanning the same query out across the
+# corpus's other major languages and merging the results fixes this the
+# same way the single-country translation fix did, just without a country
+# name to anchor the target language. Always includes the original text
+# untranslated (assumed Turkish, since every real question in this system
+# is) alongside translations into these five.
+FANOUT_LANGUAGES = ["English", "Portuguese", "German", "French", "Japanese"]
+
+# Deterministic keyword pre-check, no LLM call: does the question target
+# one specific structured field/value pair from Part 4's extraction schema
+# rather than open text? "ödemeye yakın olup vazgeçen kullanıcılar" is
+# asking about would_pay_signal='conditional' specifically - semantic
+# search alone has no way to hit that reliably, since "conditional" isn't
+# a word review authors use about themselves. Single words are PREFIX
+# matched (Turkish suffixes - same class of fix as AGGREGATE_PREFIX_
+# KEYWORDS); phrases are substring matched.
+FIELD_KEYWORD_RULES = [
+    (["ödemeye yakın", "vazgeç", "ikna olsa öderdi"], "would_pay_signal", "conditional"),
+    (["ödemem diyen", "asla ödemem"], "would_pay_signal", "no"),
+    (["iptal", "abonelik tuzağı", "deneme"], "friction_type", "subscription_trap"),
+    (["paywall", "ne zaman çıkıyor"], "friction_type", "paywall_timing"),
+    (["kota", "limit", "günlük hak"], "friction_type", "free_quota_limit"),
+    (["pahalı", "fiyat"], "friction_type", "price_level"),
+    (["arkadaş davet", "referans"], "friction_type", "referral_gate"),
+]
+
+
+def _keyword_matches(normalized, keywords):
+    for kw in keywords:
+        if " " in kw:
+            if kw in normalized:
+                return True
+        elif re.search(rf"\b{re.escape(kw)}", normalized):
+            return True
+    return False
+
+
+def detect_structured_field(question):
+    """Returns (field, value) when exactly one rule matches, else None -
+    including when more than one distinct field/value pair matches
+    (ambiguous: which one was meant is no longer a keyword lookup's call,
+    so this falls back to the existing unfiltered search rather than
+    guessing)."""
+    normalized = _normalize_for_match(question)
+    matched = {
+        (field, value)
+        for keywords, field, value in FIELD_KEYWORD_RULES
+        if _keyword_matches(normalized, keywords)
+    }
+    if len(matched) == 1:
+        return next(iter(matched))
+    return None
+
+
+AIMLESS_PHRASES = [
+    "ne önerirsin", "ne öneriyorsun", "ne tavsiye edersin", "tavsiyen ne",
+    "ne yapmalıyım", "ne yapmalı", "özetle", "özet ver", "yorumla",
+    "ne düşünüyorsun", "ne dersin",
+]
+
+
+def is_aimless_question(question):
+    """Rejects a question with no target at all - "ne önerirsin" (what do
+    you recommend) pulled back 15 arbitrary reviews and produced a
+    repetitive non-answer, because there was nothing for the search to
+    aim at. A topic signal is a country, an app, a structured field (which
+    itself already covers every friction/would-pay keyword in
+    FIELD_KEYWORD_RULES), or a plain numeric/count intent ("kaç yorum
+    topladın" names no country/app/field, but "kaç" alone is a perfectly
+    aimed question). Anything with one of those signals is never aimless.
+
+    Deliberately a denylist, not a general heuristic: a "<=3 words with no
+    topic signal" length fallback was tried and also caught "Codeway'in
+    CEO'su kim?" (3 words, names no country/app/field). That question
+    isn't aimless, it's out-of-domain - it has a clear target (Codeway's
+    CEO), just not one this corpus can answer, and the similarity-
+    threshold rejection already handles that case correctly and more
+    informatively. Conflating "no target" with "target we can't answer"
+    would lose that distinction, so only the exact phrasings below reject.
+    mentions_app/keyword_says_aggregate are defined further down but
+    that's fine - this function isn't called until module load finishes."""
+    normalized = _normalize_for_match(question)
+    has_topic_signal = (
+        bool(detect_countries(question))
+        or mentions_app(normalized)
+        or bool(detect_structured_field(question))
+        or any(_keyword_matches(normalized, keywords) for keywords, _field, _value in FIELD_KEYWORD_RULES)
+        or keyword_says_aggregate(question)
+    )
+    if has_topic_signal:
+        return False
+    return any(phrase in normalized for phrase in AIMLESS_PHRASES)
+
+
+def has_excessive_repetition(text, max_repeats=3):
+    """A model producing the same sentence four-plus times is a failure
+    mode, not a finding worth reporting - caught empirically: an aimless
+    question that slipped through produced the same sentence nine times.
+    This is a second, independent backstop behind is_aimless_question."""
+    sentences = re.split(r"[.!?\n]+", text)
+    counts = Counter(s.strip().lower() for s in sentences if len(s.strip()) > 8)
+    return any(count > max_repeats for count in counts.values())
+
+
 @dataclass
 class Answer:
     query_type: str  # "AGGREGATE" | "QUALITATIVE"
@@ -362,6 +500,9 @@ class Answer:
                                      # `text` is the human-readable (e.g. percentage)
                                      # rendering; this is the real value underneath it.
     country_distribution: dict | None = None
+    field_filter: dict | None = None  # {"field": "would_pay_signal", "value": "conditional",
+                                       # "pool_size": 155} - set only when a qualitative
+                                       # question matched a FIELD_KEYWORD_RULES entry.
     warnings: list = field(default_factory=list)
 
 
@@ -417,13 +558,20 @@ def call_ollama_text(prompt, host, num_predict=700):
     return resp.json().get("response", "")
 
 
-def embed_text(text, host):
+def embed_texts(texts, host):
+    """One /api/embed call for one or more texts - used both for a single
+    query and for the multilingual fan-out's several query variants at
+    once, cheaper than one round trip per text."""
     resp = requests.post(
-        f"{host}/api/embed", json={"model": EMBED_MODEL, "input": [text]}, timeout=30
+        f"{host}/api/embed", json={"model": EMBED_MODEL, "input": texts}, timeout=60
     )
     resp.raise_for_status()
-    vec = np.array(resp.json()["embeddings"][0], dtype=np.float32)
-    return vec / np.linalg.norm(vec)
+    vecs = np.array(resp.json()["embeddings"], dtype=np.float32)
+    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+
+
+def embed_text(text, host):
+    return embed_texts([text], host)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +713,296 @@ def inject_n_column(sql):
     return None
 
 
+def remove_unrequested_condition(sql, column):
+    """Mechanical fix symmetric to inject_n_column: strips a WHERE
+    condition on `column` that the question never asked for, keeping the
+    rest of the WHERE clause's AND-structure valid - no dangling AND, no
+    bare WHERE left behind if it was the only condition. Returns
+    (fixed_sql, removed_value), or (None, None) if no such condition is
+    found or the rewrite doesn't validate, in which case the caller falls
+    through to the LLM retry instead of trusting a rewrite that might be
+    broken."""
+    value_match = re.search(
+        rf"(?:\w+\.)?{re.escape(column)}\s*(?:=|!=|<>|<=|>=|<|>)\s*('[^']*'|\d+)", sql, re.IGNORECASE
+    )
+    if not value_match:
+        return None, None
+    removed_value = value_match.group(1).strip("'")
+
+    # Three shapes, tried in order of leftmost match (re.sub always finds
+    # the earliest starting position regardless of alternative order): a
+    # condition with a leading AND (middle or last in the WHERE clause), a
+    # condition with a trailing AND (first in the clause), or a bare
+    # condition with no adjacent AND at all (the only condition present).
+    cond_pattern = re.compile(
+        rf"(?:\s+AND\s+(?:\w+\.)?{re.escape(column)}\s*(?:=|!=|<>|<=|>=|<|>)\s*(?:'[^']*'|\d+))"
+        rf"|(?:(?:\w+\.)?{re.escape(column)}\s*(?:=|!=|<>|<=|>=|<|>)\s*(?:'[^']*'|\d+)\s+AND\s+)"
+        rf"|(?:(?:\w+\.)?{re.escape(column)}\s*(?:=|!=|<>|<=|>=|<|>)\s*(?:'[^']*'|\d+))",
+        re.IGNORECASE,
+    )
+    fixed, count = cond_pattern.subn("", sql, count=1)
+    if count == 0:
+        return None, None
+
+    # If that was the only condition, WHERE is now dangling (nothing left
+    # before GROUP BY/ORDER BY/HAVING or the end of the string).
+    fixed = re.sub(r"\bWHERE\s*(?=GROUP\b|ORDER\b|HAVING\b|$)", "", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"\s+", " ", fixed).strip()
+
+    ok, cleaned = is_safe_select(fixed)
+    if not ok:
+        return None, None
+    return cleaned, removed_value
+
+
+# App names/short aliases people actually type, mapped to the exact value
+# stored in reviews.app. Shared by the SQL missing-filter check below and
+# by the aimless-question check in the qualitative path.
+APP_ALIASES = {
+    "retake ai": "Retake AI Face & Selfie Editor",
+    "retake": "Retake AI Face & Selfie Editor",
+    "reshoot": "ReShoot: AI Face Photo Editor",
+    "nova": "AI Chatbot - Nova",
+    "chat ai": "Chat AI: Ask Agent Anything",
+}
+
+STAR_RATING_RE = re.compile(r"\b[1-5]\s*yıldız", re.IGNORECASE)
+LOW_HIGH_RATING_PHRASES = ["düşük puanlı", "yüksek puanlı", "düşük puan", "yüksek puan"]
+YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+DATE_PHRASES = [
+    "geçen ay", "bu yıl", "geçen yıl", "son bir ay", "son 3 ay", "son üç ay",
+    "son 6 ay", "son altı ay", "bu ay", "ocak", "şubat", "mart", "nisan",
+    "mayıs", "haziran", "temmuz", "ağustos", "eylül", "ekim", "kasım", "aralık",
+]
+
+
+def mentions_rating(normalized):
+    return bool(STAR_RATING_RE.search(normalized)) or any(p in normalized for p in LOW_HIGH_RATING_PHRASES)
+
+
+def mentions_app(normalized):
+    return any(alias in normalized for alias in APP_ALIASES)
+
+
+def mentions_date(normalized):
+    return bool(YEAR_RE.search(normalized)) or any(p in normalized for p in DATE_PHRASES)
+
+
+def has_column_condition(sql, column):
+    """True if the SQL actually restricts on `column` (any comparison
+    operator, optionally alias-qualified) - not just mentions it in SELECT
+    or GROUP BY, which references a column without restricting the
+    population at all. Without this distinction, "SELECT r.app ... GROUP
+    BY r.app" (no WHERE app filter, just per-app rows in the output) would
+    look identical to an actual "WHERE r.app = 'X'" restriction to both
+    directions of detect_filter_mismatches below."""
+    return bool(
+        re.search(
+            rf"(?:\w+\.)?{re.escape(column)}\s*(?:=|!=|<>|<=|>=|<|>|IN\s*\(|BETWEEN|LIKE)",
+            sql,
+            re.IGNORECASE,
+        )
+    )
+
+
+FILTER_COLUMN_LABELS = {"rating": "puan/yıldız", "country": "ülke", "app": "uygulama", "review_date": "tarih/dönem"}
+
+
+def _question_wants(question):
+    """Which of the four checked filter columns the question's own
+    wording actually calls for. Shared by both directions below, and by
+    the mechanical-removal step in answer_aggregate, so all three agree
+    on exactly the same definition of "the question asked for this"."""
+    normalized = _normalize_for_match(question)
+    return {
+        "rating": mentions_rating(normalized),
+        "country": bool(detect_countries(question)),
+        "app": mentions_app(normalized),
+        "review_date": mentions_date(normalized),
+    }
+
+
+def missing_filter_columns(question, sql):
+    wants = _question_wants(question)
+    return [col for col, wanted in wants.items() if wanted and not has_column_condition(sql, col)]
+
+
+def extra_filter_columns(question, sql):
+    """Columns where the SQL applies a condition the question never asked
+    for. in_estimation_frame and validation_status are exempt on purpose
+    - not via special-case code, but because this only ever checks the
+    four columns in _question_wants, and every rate query needs those two
+    regardless of the question's wording, so they were never candidates
+    for "unrequested filter" in the first place."""
+    wants = _question_wants(question)
+    return [col for col, wanted in wants.items() if not wanted and has_column_condition(sql, col)]
+
+
+def detect_filter_mismatches(question, sql):
+    """Both directions of "does the SQL match what the question actually
+    asked" - checked together because they're the same failure mode: a
+    plausible-looking number for a different question than the one asked.
+
+    1) soruda var, SQL'de yok: "Retake AI'da 1 yıldızlı yorumların yüzde
+       kaçı paywall ile ilgili?" came back with an app filter but no
+       rating filter - the SQL ran and returned a number for a broader
+       question than the one actually asked.
+    2) SQL'de var, soruda yok: the very next fix for that same question
+       came back with an unrequested country='tr' filter nobody asked
+       for - 25.0% (n=12) instead of the real 30.2% (n=63) across all
+       countries. Same failure, opposite direction."""
+    issues = []
+    for column in missing_filter_columns(question, sql):
+        issues.append(f"soruda {FILTER_COLUMN_LABELS[column]} ifadesi var ama SQL'de {column} filtresi yok")
+    for column in extra_filter_columns(question, sql):
+        match = re.search(rf"(?:\w+\.)?{column}\s*(?:=|!=|<>)\s*'?([^'\s)]+)'?", sql, re.IGNORECASE)
+        detail = f"={match.group(1)!r}" if match else ""
+        issues.append(f"soruda {FILTER_COLUMN_LABELS[column]} belirtilmemiş ama SQL {column}{detail} filtresi uyguluyor")
+    return issues
+
+
+# Columns that exist ONLY on extractions - not review_id/cluster_id, which
+# exist on both tables and so don't justify a join on their own.
+EXTRACTIONS_ONLY_COLUMNS = {
+    "friction_type", "trigger_moment", "mentions_price", "price_mentioned",
+    "paid_but_still_limited", "would_pay_signal", "feature_praised", "gist",
+    "in_estimation_frame", "in_discovery_frame", "selection_weight",
+    "validation_status", "extracted_at", "elapsed_sec", "model_name",
+    "prompt_version", "raw_output",
+}
+
+JOIN_EXTRACTIONS_RE = re.compile(
+    r"FROM\s+extractions\s+(\w+)\s+JOIN\s+reviews\s+(\w+)\s+ON\s+.+?(?=\s+WHERE\b|\s+GROUP\b|\s+ORDER\b|\s+HAVING\b|$)",
+    re.IGNORECASE,
+)
+
+
+def uses_extractions_only_column(sql):
+    lower = sql.lower()
+    return any(col in lower for col in EXTRACTIONS_ONLY_COLUMNS)
+
+
+def remove_unnecessary_extractions_join(sql):
+    """If the SQL joins extractions but references none of its own
+    columns, that join only narrows the population to the ~1,035 sampled
+    rows for no reason (measured: "how many reviews from Germany" came
+    back 113 via an extractions join instead of the correct ~800 from
+    reviews alone). Best-effort mechanical removal for the shape our own
+    schema prompt actually produces (extractions first, reviews second);
+    returns None if that shape isn't matched or the rewrite doesn't
+    validate, so the caller can fall back instead of trusting a rewrite
+    that might be broken."""
+    if uses_extractions_only_column(sql):
+        return None
+    match = JOIN_EXTRACTIONS_RE.search(sql)
+    if not match:
+        return None
+    e_alias, r_alias = match.group(1), match.group(2)
+    fixed = f"{sql[:match.start()]}FROM reviews {r_alias}{sql[match.end():]}"
+    # Any leftover reference to the extractions alias (e.g. COUNT(e.review_id))
+    # is safe to repoint at the reviews alias - uses_extractions_only_column
+    # already confirmed nothing extractions-exclusive is referenced here.
+    fixed = re.sub(rf"\b{re.escape(e_alias)}\.", f"{r_alias}.", fixed)
+    ok, cleaned = is_safe_select(fixed)
+    return cleaned if ok else None
+
+
+# Cached per db_path so a long-running process (the Flask app) reads these
+# once, not on every question. Loaded from the database itself, not
+# hardcoded, so validation can never drift from what's actually in it.
+_VALID_VALUES_CACHE = {}
+
+
+def load_valid_values(db_path):
+    conn = get_connection(db_path)
+    try:
+        return {
+            "app": {r[0] for r in conn.execute("SELECT DISTINCT app FROM reviews")},
+            "country": {r[0] for r in conn.execute("SELECT DISTINCT country FROM reviews")},
+            "friction_type": {
+                r[0] for r in conn.execute("SELECT DISTINCT friction_type FROM extractions WHERE friction_type IS NOT NULL")
+            },
+            "trigger_moment": {
+                r[0] for r in conn.execute("SELECT DISTINCT trigger_moment FROM extractions WHERE trigger_moment IS NOT NULL")
+            },
+            "would_pay_signal": {
+                r[0] for r in conn.execute("SELECT DISTINCT would_pay_signal FROM extractions WHERE would_pay_signal IS NOT NULL")
+            },
+        }
+    finally:
+        conn.close()
+
+
+def get_valid_values(db_path):
+    if db_path not in _VALID_VALUES_CACHE:
+        _VALID_VALUES_CACHE[db_path] = load_valid_values(db_path)
+    return _VALID_VALUES_CACHE[db_path]
+
+
+# Matches <optional alias.><validated column> compared to either a single
+# quoted literal or an IN (...) list of them - the two shapes our own
+# schema prompt's examples actually produce.
+LITERAL_COLUMN_RE = re.compile(
+    r"(?:\w+\.)?(app|country|friction_type|trigger_moment|would_pay_signal)\s*"
+    r"(?:=|!=|<>|IN)\s*(\([^)]*\)|'(?:[^'\\]|\\.)*')",
+    re.IGNORECASE,
+)
+
+
+def extract_literal_checks(sql):
+    """(column, literal) for every string literal compared against one of
+    the five validated columns, whether via = or an IN (...) list."""
+    checks = []
+    for match in LITERAL_COLUMN_RE.finditer(sql):
+        column = match.group(1).lower()
+        for literal in re.findall(r"'((?:[^'\\]|\\.)*)'", match.group(2)):
+            checks.append((column, literal))
+    return checks
+
+
+def find_close_match(literal, valid_values):
+    """Case-insensitive exact match first, then a substring match in
+    either direction - catches a shortened value like 'Retake AI' for the
+    real 'Retake AI Face & Selfie Editor'. Returns the corrected value, or
+    None if zero or more than one candidate qualifies - an ambiguous match
+    is treated the same as no match, since guessing which of two
+    plausible values was meant isn't this function's job."""
+    lit_lower = literal.lower()
+    for v in valid_values:
+        if v.lower() == lit_lower:
+            return v
+    candidates = [v for v in valid_values if lit_lower in v.lower() or v.lower() in lit_lower]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def validate_literals(sql, valid_values):
+    """Checks every string literal compared against app/country/
+    friction_type/trigger_moment/would_pay_signal against the real values
+    read from the database - a literal matching no real row (measured:
+    r.app = 'Retake AI' instead of 'Retake AI Face & Selfie Editor') would
+    otherwise return an honest-looking zero silently instead of erroring.
+    Runs before the query is ever executed. Returns (sql, corrections,
+    rejection): rejection is None on success; corrections lists every
+    literal this fixed on its own without asking the model again -
+    swapping a value for its one unambiguous real counterpart doesn't need
+    an LLM round trip, unlike a missing filter (which changes what the
+    query means, not just how one value is spelled)."""
+    corrections = []
+    for column, literal in extract_literal_checks(sql):
+        valid = valid_values.get(column)
+        if not valid or literal in valid:
+            continue
+        fix = find_close_match(literal, valid)
+        if fix:
+            sql = re.sub(rf"'{re.escape(literal)}'", f"'{fix}'", sql)
+            corrections.append(f"'{literal}' -> '{fix}' olarak düzeltildi")
+        else:
+            values_list = ", ".join(sorted(valid))
+            rejection = f"'{literal}' değeri {column} sütunu için geçerli bir değer değil. Geçerli değerler: {values_list}"
+            return sql, corrections, rejection
+    return sql, corrections, None
+
+
 def run_select(sql, db_path):
     """Executes against a read-only connection (defense in depth on top of
     is_safe_select - belt and suspenders for arbitrary LLM-generated SQL)."""
@@ -662,44 +1100,94 @@ def answer_aggregate(question, host, db_path, debug=False):
         )
     sql = result
 
-    if looks_like_ratio_query(sql):
-        issues = ratio_query_issues(sql)
+    fixed_join_sql = remove_unnecessary_extractions_join(sql)
+    if fixed_join_sql:
+        sql = fixed_join_sql
+        warnings.append("gereksiz extractions JOIN'i kaldırıldı (sorgu extractions'a özgü bir alan kullanmıyordu)")
+        if debug:
+            print(f"[debug] join removed:\n{sql}\n")
 
-        # Mechanical fix first: if n is the only thing missing, splice in
-        # COUNT(*) AS n ourselves rather than spending an LLM call asking
-        # the model to do something this deterministic. Only touches the
-        # n requirement - frame/weight issues always need the LLM retry,
-        # since fixing those means changing WHAT the query filters on, not
-        # just adding a column.
-        if issues == ["COUNT(*) AS n sütunu eksik - n olmadan bir oran raporlanamaz"]:
-            fixed_sql = inject_n_column(sql)
-            if fixed_sql:
-                sql = fixed_sql
-                issues = []
-                warnings.append("n sütunu otomatik eklendi (COUNT(*) AS n)")
-                if debug:
-                    print(f"[debug] mechanically fixed SQL:\n{sql}\n")
+    N_MISSING = "COUNT(*) AS n sütunu eksik - n olmadan bir oran raporlanamaz"
 
-        if issues:
-            reason = "; ".join(issues)
-            retry_sql = generate_sql(question, host, retry_reason=reason, previous_sql=sql)
-            if debug:
-                print(f"[debug] retry SQL:\n{retry_sql}\n")
-            ok2, result2 = is_safe_select(retry_sql)
-            issues2 = ratio_query_issues(result2) if ok2 and looks_like_ratio_query(result2) else []
-            if ok2 and not issues2:
-                sql = result2
-            else:
-                return Answer(
-                    query_type="AGGREGATE",
-                    text=(
-                        "Oran hesaplayan SQL iki denemede de gerekli şartları taşımadı "
-                        f"({'; '.join(issues2) if ok2 else issues[0]}); n olmadan bir oran "
-                        "raporlanamaz, bu yüzden çalıştırılmadı."
-                    ),
-                    sql=retry_sql,
-                    warnings=["ağırlıklı oran kontrolü başarısız: " + "; ".join(issues2 or issues)],
-                )
+    def collect_issues(candidate_sql):
+        found = detect_filter_mismatches(question, candidate_sql)
+        if looks_like_ratio_query(candidate_sql):
+            found = found + ratio_query_issues(candidate_sql)
+        return found
+
+    def mechanical_fix(candidate_sql):
+        """Every deterministic fix that doesn't need the model, applied in
+        order: strip any filter condition the question never asked for
+        (symmetric to the injection below - both are things we can just
+        compute, not things that need the model to decide), then, if the
+        record-count column is the only thing left missing, splice in
+        COUNT(*) AS n. Returns (sql, warnings earned, remaining issues)."""
+        local_warnings = []
+        for column in extra_filter_columns(question, candidate_sql):
+            fixed, removed_value = remove_unrequested_condition(candidate_sql, column)
+            if fixed:
+                candidate_sql = fixed
+                local_warnings.append(f"soruda geçmeyen {column}='{removed_value}' filtresi kaldırıldı")
+
+        remaining = collect_issues(candidate_sql)
+        if remaining == [N_MISSING]:
+            fixed_n = inject_n_column(candidate_sql)
+            if fixed_n:
+                candidate_sql = fixed_n
+                local_warnings.append("n sütunu otomatik eklendi (COUNT(*) AS n)")
+                remaining = []
+
+        return candidate_sql, local_warnings, remaining
+
+    # Order: mechanical fixes first (free, deterministic), LLM retry
+    # second (needed when a fix requires understanding what the question
+    # meant, not just computing a value), refusal last.
+    sql, fix_warnings, issues = mechanical_fix(sql)
+    warnings.extend(fix_warnings)
+    if debug and fix_warnings:
+        print(f"[debug] mechanical fixes applied: {fix_warnings}\n")
+
+    if issues:
+        reason = "; ".join(issues)
+        retry_sql = generate_sql(question, host, retry_reason=reason, previous_sql=sql)
+        if debug:
+            print(f"[debug] retry SQL:\n{retry_sql}\n")
+        ok2, result2 = is_safe_select(retry_sql)
+        if ok2:
+            fixed_join2 = remove_unnecessary_extractions_join(result2)
+            if fixed_join2:
+                result2 = fixed_join2
+            result2, fix_warnings2, issues2 = mechanical_fix(result2)
+        else:
+            fix_warnings2, issues2 = [], [result2]
+        if ok2 and not issues2:
+            sql = result2
+            warnings.extend(fix_warnings2)
+            if debug and fix_warnings2:
+                print(f"[debug] mechanical fixes applied after retry: {fix_warnings2}\n")
+        else:
+            return Answer(
+                query_type="AGGREGATE",
+                text=(
+                    "Üretilen SQL iki denemede de sorunun gerektirdiği şartları taşımadı "
+                    f"({'; '.join(issues2) if ok2 else issues[0]}); bu yüzden çalıştırılmadı."
+                ),
+                sql=retry_sql,
+                warnings=["SQL doğrulama başarısız: " + "; ".join(issues2 if ok2 else issues)],
+            )
+
+    valid_values = get_valid_values(db_path)
+    sql, literal_corrections, rejection = validate_literals(sql, valid_values)
+    if debug and literal_corrections:
+        print(f"[debug] literal corrections: {literal_corrections}\n")
+    if rejection:
+        return Answer(
+            query_type="AGGREGATE",
+            text=f"Üretilen SQL çalıştırılmadı: {rejection}",
+            sql=sql,
+            warnings=warnings,
+        )
+    warnings.extend(literal_corrections)
 
     try:
         columns, rows = run_select(sql, db_path)
@@ -732,30 +1220,46 @@ def answer_aggregate(question, host, db_path, debug=False):
 # ---------------------------------------------------------------------------
 
 
-def load_corpus(conn, country=None):
-    """country, when given, filters the search pool BEFORE similarity is
-    computed — not after. Filtering after the fact would just be a smaller
-    top-K over the same language-skewed ranking; filtering the pool is what
-    actually lets a Turkish-phrased question reach Japanese reviews."""
+def load_corpus(conn, country=None, field_filter=None):
+    """country and field_filter both filter the search pool BEFORE
+    similarity is computed - not after. Filtering after the fact would
+    just be a smaller top-K over the same skewed ranking; filtering the
+    pool is what actually lets a Turkish-phrased question reach Japanese
+    reviews, or a "vazgeçen kullanıcılar" question reach only
+    would_pay_signal='conditional' rows instead of the whole corpus.
+
+    field_filter's field name is never user-supplied text - it only ever
+    comes from FIELD_KEYWORD_RULES, a fixed constant in this file - so
+    interpolating it into the query is not an injection risk."""
     query = """
-        SELECT e.review_id, e.vector, r.body, r.country, r.rating
+        SELECT e.review_id, e.vector, r.body, r.country, r.rating, r.app
         FROM embeddings e JOIN reviews r ON r.review_id = e.review_id
     """
-    params = ()
+    conditions = []
+    params = []
+    if field_filter:
+        field_name, field_value = field_filter
+        query += " JOIN extractions ext ON ext.review_id = e.review_id"
+        conditions.append(f"ext.{field_name} = ?")
+        params.append(field_value)
     if country:
-        query += " WHERE r.country = ?"
-        params = (country,)
+        conditions.append("r.country = ?")
+        params.append(country)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
     rows = conn.execute(query, params).fetchall()
     if not rows:
-        where = f" (country={country!r})" if country else ""
+        where = f" (country={country!r}, field_filter={field_filter!r})" if (country or field_filter) else ""
         raise RuntimeError(f"no embeddings found{where} - run src/embed.py first")
     review_ids = [r[0] for r in rows]
     vectors = np.stack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
     bodies = [r[2] for r in rows]
     countries = [r[3] for r in rows]
     ratings = [r[4] for r in rows]
+    apps = [r[5] for r in rows]
     norm_vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-    return review_ids, norm_vectors, bodies, countries, ratings
+    return review_ids, norm_vectors, bodies, countries, ratings, apps
 
 
 def build_synth_prompt(question, context):
@@ -775,9 +1279,13 @@ def answer_qualitative(question, host, db_path, debug=False):
             "- filtre uygulanmadı, tüm korpusta arandı"
         )
 
+    field_filter = detect_structured_field(question)
+
     conn = get_connection(db_path)
     try:
-        review_ids, norm_vectors, bodies, countries, ratings = load_corpus(conn, country=country_filter)
+        review_ids, norm_vectors, bodies, countries, ratings, apps = load_corpus(
+            conn, country=country_filter, field_filter=field_filter
+        )
     finally:
         conn.close()
 
@@ -789,23 +1297,31 @@ def answer_qualitative(question, host, db_path, debug=False):
         threshold = MIN_TOP1_SIMILARITY_DEFAULT
         threshold_note = f"eşik {threshold} - ülke filtresi yok"
 
-    # Filtering the pool to one country doesn't fix a query written in a
-    # different language than that country's reviews (measured: Brazil
-    # stayed at top1=0.51 even after country=br filtering, well below
-    # threshold - the pool was right, the query's language wasn't). Only
-    # translate when the target language actually differs from Turkish,
-    # since every question in practice arrives in Turkish already - "tr"
-    # named as the country is the one case that needs no LLM call at all.
-    search_text = question
     if country_filter and country_filter != "tr":
+        # Filtering the pool to one country doesn't fix a query written in
+        # a different language than that country's reviews (measured:
+        # Brazil stayed at top1=0.51 even after country=br filtering - the
+        # pool was right, the query's language wasn't).
         target_language = COUNTRY_LANGUAGE[country_filter]
-        search_text = translate_query(question, target_language, host)
-        warnings.append(
-            f"sorgu {COUNTRY_LANGUAGE_DATIVE[country_filter]} çevrildi: '{search_text}'"
-        )
+        translated = translate_query(question, target_language, host)
+        search_texts = [translated]
+        warnings.append(f"sorgu {COUNTRY_LANGUAGE_DATIVE[country_filter]} çevrildi: '{translated}'")
+    elif country_filter == "tr":
+        search_texts = [question]
+    else:
+        # No country named -> a single embedding only ever reaches reviews
+        # in whatever language the question itself was written in
+        # (measured: a Turkish question with no country name scored 100%
+        # tr in its top 15, regardless of topic). Fan out across the
+        # corpus's other major languages and merge by best score instead.
+        translations = [translate_query(question, lang, host) for lang in FANOUT_LANGUAGES]
+        search_texts = [question] + translations
+        if debug:
+            print(f"[debug] fanout translations: {translations}\n")
 
-    qv = embed_text(search_text, host)
-    sims = norm_vectors @ qv
+    query_vectors = embed_texts(search_texts, host)
+    sims = (norm_vectors @ query_vectors.T).max(axis=1)  # best score across variants, per review
+
     k = min(QUALITATIVE_TOP_K, pool_size)
     top_idx = np.argsort(-sims)[:k]
     top_sims = sims[top_idx]
@@ -814,8 +1330,9 @@ def answer_qualitative(question, host, db_path, debug=False):
 
     if debug:
         print(
-            f"[debug] country_filter={country_filter} pool={pool_size} search_text={search_text!r} "
-            f"top1={top1_sim:.3f} top15_mean={float(top_sims.mean()):.3f} threshold={threshold}\n"
+            f"[debug] country_filter={country_filter} field_filter={field_filter} pool={pool_size} "
+            f"n_variants={len(search_texts)} top1={top1_sim:.3f} top15_mean={float(top_sims.mean()):.3f} "
+            f"threshold={threshold}\n"
         )
 
     country_counts = Counter(countries[i] for i in top_idx)
@@ -832,15 +1349,18 @@ def answer_qualitative(question, host, db_path, debug=False):
             "(reviews tablosunda ayrı bir dil sütunu yok, ülke dil için proxy olarak kullanıldı)"
         )
     else:
-        # No country named -> old behavior: search runs over the full
-        # corpus, and nomic-embed-text encodes language before topic, so
-        # results skew toward the question's own language. Structural, not
-        # conditional - shown every time this branch is taken.
         warnings.append(
-            "ülke belirtilmedi: anlamsal arama sorunun dilinde yoğunlaşma eğiliminde "
-            "(nomic-embed-text çok dilli korpusta önce dili kodluyor, konuyu sonra) - "
-            "aşağıdaki ülke dağılımına bakın; reviews tablosunda ayrı bir dil sütunu yok"
+            "ülke belirtilmedi: sorgu 5 dile çevrilip her dilde ayrı arandı, sonuçlar en iyi "
+            "skora göre birleştirildi (nomic-embed-text çok dilli korpusta önce dili kodluyor, "
+            "konuyu sonra - tek dilde arasaydı sonuçlar sorunun dilinde kilitlenirdi); aşağıdaki "
+            "ülke dağılımına bakın"
         )
+
+    field_filter_info = None
+    if field_filter:
+        field_name, field_value = field_filter
+        field_filter_info = {"field": field_name, "value": field_value, "pool_size": pool_size}
+        warnings.append(f"alan filtresi: {field_name}='{field_value}' ile sınırlandı, {pool_size} kayıt havuzu")
 
     # Threshold used is always shown, not just on refusal - which gate
     # applied is as much a part of the answer as the answer itself.
@@ -855,25 +1375,40 @@ def answer_qualitative(question, host, db_path, debug=False):
             ),
             n=0,
             country_distribution=country_dist,
+            field_filter=field_filter_info,
             warnings=warnings,
         )
 
     if n_matches < MIN_MATCHES_WARN:
         warnings.append(f"sonuç {MIN_MATCHES_WARN}'ten az kayda dayanıyor (n={n_matches})")
 
+    # No review_id in what the model sees - it can't cite what it never
+    # received. The real ids still travel separately in Answer.review_ids
+    # for traceability; app is what the model attributes claims to instead.
     context = "\n".join(
-        f"[{review_ids[i]}] (ülke={countries[i]}, puan={ratings[i]}) "
+        f"(app={apps[i]}, ülke={countries[i]}, puan={ratings[i]}) "
         f"{(bodies[i] or '').strip().replace(chr(10), ' ')}"
         for i in top_idx
     )
-    raw = call_ollama_text(build_synth_prompt(question, context), host)
+    raw = call_ollama_text(build_synth_prompt(question, context), host).strip()
+
+    if has_excessive_repetition(raw):
+        return Answer(
+            query_type="QUALITATIVE",
+            text="Model üretimi aynı cümleyi tekrar tekrar üretti; bu bir bulgu değil, üretim hatası - gösterilmiyor.",
+            n=0,
+            country_distribution=country_dist,
+            field_filter=field_filter_info,
+            warnings=warnings + ["sentez çıktısı reddedildi: aşırı tekrar tespit edildi"],
+        )
 
     return Answer(
         query_type="QUALITATIVE",
-        text=raw.strip(),
+        text=raw,
         review_ids=[review_ids[i] for i in top_idx],
         n=n_matches,
         country_distribution=country_dist,
+        field_filter=field_filter_info,
         warnings=warnings,
     )
 
@@ -883,7 +1418,17 @@ def answer_qualitative(question, host, db_path, debug=False):
 # ---------------------------------------------------------------------------
 
 
+AIMLESS_REJECTION_TEXT = "Bu soru belirli bir konuya işaret etmiyor. Bir uygulama, ülke veya sürtünme türü belirtin."
+
+
 def answer(question, host=OLLAMA_HOST, db_path=DB_PATH, debug=False):
+    # Checked before routing at all, so a question like "ne önerirsin" (no
+    # topic, country, app, or field) never reaches either path - it can't
+    # be misrouted to AGGREGATE and produce nonsense SQL, and it doesn't
+    # depend on the (measured-flaky) LLM router's classification either.
+    if is_aimless_question(question):
+        return Answer(query_type="QUALITATIVE", text=AIMLESS_REJECTION_TEXT, n=0)
+
     query_type, classify_warning = classify_question(question, host)
     if debug:
         note = f" ({classify_warning})" if classify_warning else ""
