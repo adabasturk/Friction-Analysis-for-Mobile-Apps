@@ -1,6 +1,7 @@
 data/raw/
 data/*.db
 data/*.npy
+logs/
 .env
 __pycache__/
 .DS_Store

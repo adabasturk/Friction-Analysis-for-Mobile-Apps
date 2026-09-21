@@ -1,4 +1,4 @@
-"""SQLite connection and schema for friction-atlas.
+"""SQLite connection and schema for Mobile Apps: Funnel Friction Analysis.
 
 Usage:
     python src/db.py                       # create data/friction.db with the schema

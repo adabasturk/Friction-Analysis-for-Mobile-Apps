@@ -1,4 +1,4 @@
-# friction-atlas
+# Mobile Apps: Funnel Friction Analysis
 
 ## Project
 

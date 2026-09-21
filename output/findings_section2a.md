@@ -1,0 +1,19 @@
+## 2a. friction_type distribution, within pair
+- **chatbot / paywall_timing**: Chat AI %4.3 (n=149) vs Nova %2.5 (n=148) -> not significant (CIs overlap)
+- **chatbot / price_level**: Chat AI %2.4 (n=149) vs Nova %2.5 (n=148) -> not significant (CIs overlap)
+- **chatbot / subscription_trap**: Chat AI %3.3 (n=149) vs Nova %7.4 (n=148) -> not significant (CIs overlap)
+- **chatbot / free_quota_limit**: Chat AI %4.3 (n=149) vs Nova %3.9 (n=148) -> not significant (CIs overlap)
+- **chatbot / referral_gate**: Chat AI %0.7 (n=149) vs Nova %0.0 (n=148) -> not significant (CIs overlap)
+- **chatbot / quality_gap**: Chat AI %2.5 (n=149) vs Nova %3.6 (n=148) -> not significant (CIs overlap)
+- **chatbot / onboarding_confusion**: Chat AI %7.1 (n=149) vs Nova %6.7 (n=148) -> not significant (CIs overlap)
+- **chatbot / performance**: Chat AI %0.7 (n=149) vs Nova %4.2 (n=148) -> not significant (CIs overlap)
+- **chatbot / none**: Chat AI %74.6 (n=149) vs Nova %69.3 (n=148) -> not significant (CIs overlap)
+- **face / paywall_timing**: Retake AI %14.1 (n=150) vs ReShoot %6.3 (n=149) -> significant
+- **face / price_level**: Retake AI %9.0 (n=150) vs ReShoot %1.6 (n=149) -> significant
+- **face / subscription_trap**: Retake AI %6.1 (n=150) vs ReShoot %4.8 (n=149) -> not significant (CIs overlap)
+- **face / free_quota_limit**: Retake AI %9.0 (n=150) vs ReShoot %5.3 (n=149) -> not significant (CIs overlap)
+- **face / referral_gate**: Retake AI %1.0 (n=150) vs ReShoot %1.4 (n=149) -> not significant (CIs overlap)
+- **face / quality_gap**: Retake AI %4.0 (n=150) vs ReShoot %5.1 (n=149) -> not significant (CIs overlap)
+- **face / onboarding_confusion**: Retake AI %6.8 (n=150) vs ReShoot %7.0 (n=149) -> not significant (CIs overlap)
+- **face / performance**: Retake AI %1.8 (n=150) vs ReShoot %1.4 (n=149) -> not significant (CIs overlap)
+- **face / none**: Retake AI %48.2 (n=150) vs ReShoot %67.1 (n=149) -> significant

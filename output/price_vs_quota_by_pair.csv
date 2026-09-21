@@ -1,0 +1,5 @@
+pair,codeway_app,codeway_rate,codeway_ci_low,codeway_ci_high,codeway_n,hubx_app,hubx_rate,hubx_ci_low,hubx_ci_high,hubx_n,verdict,friction_type
+chatbot,Chat AI: Ask Agent Anything,0.023873873873873876,0.0,0.0481523416228548,149,AI Chatbot - Nova,0.024974439858160787,0.0009675126616658994,0.048981367054655674,148,not significant (CIs overlap),price_level
+face,Retake AI Face & Selfie Editor,0.08982231243100809,0.04709074518662478,0.1325538796753914,150,ReShoot: AI Face Photo Editor,0.015678776290630976,0.0,0.03148285221230391,149,significant,price_level
+chatbot,Chat AI: Ask Agent Anything,0.04347199151362225,0.012708546495568133,0.07423543653167637,149,AI Chatbot - Nova,0.03910231886976073,0.008872217097342809,0.06933242064217865,148,not significant (CIs overlap),free_quota_limit
+face,Retake AI Face & Selfie Editor,0.08982231243100809,0.04709074518662478,0.1325538796753914,150,ReShoot: AI Face Photo Editor,0.05319389706169274,0.022824919571488276,0.0835628745518972,149,not significant (CIs overlap),free_quota_limit

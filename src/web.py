@@ -31,10 +31,10 @@ EXAMPLE_QUESTIONS = [
 # Exact strings ask.py's answer() emits - used below to recognize a
 # rejection and a weighted-rate answer without touching ask.py itself.
 # ask.py keeps returning full detail (the threshold, translation note,
-# "0 kayda dayanıyor", full warnings list) for the CLI; this file just
+# "n=0 records", full warnings list) for the CLI; this file just
 # doesn't put all of it on screen. Simplification lives here, not there.
-QUALITATIVE_REJECTION_PREFIX = "Bu soruyu yanıtlayacak veri yok"
-WEIGHTED_RATE_NOTE = "kestirim çerçevesi, ağırlıklı"
+QUALITATIVE_REJECTION_PREFIX = "No data to answer this question"
+WEIGHTED_RATE_NOTE = "estimation frame, weighted"
 
 
 def display_text(result):
@@ -42,7 +42,7 @@ def display_text(result):
     score, threshold, filter state) - that detail is for the CLI/debug
     audience, not this screen."""
     if result.query_type == "QUALITATIVE" and result.text.startswith(QUALITATIVE_REJECTION_PREFIX):
-        return "Bu soruyu yanıtlayacak veri yok."
+        return "No data to answer this question."
     return result.text
 
 
@@ -52,25 +52,25 @@ def footer_note(result):
     can use: how many reviews this rests on, in plain words."""
     if result.query_type == "QUALITATIVE":
         if result.text.startswith(QUALITATIVE_REJECTION_PREFIX):
-            return "yeterince yakın eşleşme bulunamadı"
+            return "no sufficiently close match found"
         if result.n:
-            return f"{result.n} yorumdan derlendi"
+            return f"compiled from {result.n} reviews"
         return None
 
     if result.query_type == "AGGREGATE":
         if WEIGHTED_RATE_NOTE in result.warnings and result.n:
-            return f"rastgele seçilmiş {result.n} yorum üzerinden"
+            return f"based on {result.n} randomly sampled reviews"
         return None
 
     return None
 
 
 PAGE = """<!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Friction Atlas — Soru-Cevap</title>
+<title>Mobile Apps: Funnel Friction Analysis — Q&A</title>
 <style>
   :root {
     --bg: #faf7f2;
@@ -225,20 +225,20 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <main>
-  <h1>Friction Atlas</h1>
-  <p class="subtitle">App Store yorumları üzerinde soru-cevap</p>
+  <h1>Mobile Apps: Funnel Friction Analysis</h1>
+  <p class="subtitle">Ask questions over App Store reviews</p>
 
   <form id="ask-form">
-    <input type="text" id="question" name="question" placeholder="Bir soru sorun..." autocomplete="off">
-    <button type="submit">Sor</button>
+    <input type="text" id="question" name="question" placeholder="Ask a question..." autocomplete="off">
+    <button type="submit">Ask</button>
   </form>
 
   <div class="examples">
-    <div class="examples-label">örnek sorular</div>
+    <div class="examples-label">example questions</div>
     <div class="example-list" id="example-list"></div>
   </div>
 
-  <div id="loading" hidden>Yanıt hazırlanıyor... (gemma3:4b bu makinede CPU üzerinde çalışıyor, 10–60 saniye sürebilir)</div>
+  <div id="loading" hidden>Preparing answer... (gemma3:4b is running on CPU on this machine, can take 10-60 seconds)</div>
 
   <div id="error" hidden></div>
 
@@ -333,7 +333,7 @@ async function runQuery(question) {
     renderResult(data);
   } catch (err) {
     loading.hidden = true;
-    errorBox.textContent = "İstek başarısız: " + err;
+    errorBox.textContent = "Request failed: " + err;
     errorBox.hidden = false;
   }
 }
@@ -353,12 +353,12 @@ def ask_endpoint():
     data = request.get_json(force=True, silent=True) or {}
     question = (data.get("question") or "").strip()
     if not question:
-        return jsonify({"error": "soru boş olamaz"}), 400
+        return jsonify({"error": "question cannot be empty"}), 400
 
     try:
         result = answer(question, host=OLLAMA_HOST, db_path=DB_PATH)
     except Exception as exc:  # noqa: BLE001 - surface any failure to the page instead of a bare 500
-        return jsonify({"error": f"Soru yanıtlanamadı: {exc}"}), 500
+        return jsonify({"error": f"Could not answer the question: {exc}"}), 500
 
     return jsonify(
         {

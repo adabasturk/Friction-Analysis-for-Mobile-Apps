@@ -1,0 +1,3 @@
+pair,codeway_app,codeway_rate,codeway_ci_low,codeway_ci_high,codeway_n,hubx_app,hubx_rate,hubx_ci_low,hubx_ci_high,hubx_n,verdict
+chatbot,Chat AI: Ask Agent Anything,0.06656397128745939,0.03365239812803573,0.09947554444688306,149,AI Chatbot - Nova,0.06009105450965916,0.024858191325047116,0.0953239176942712,148,not significant (CIs overlap)
+face,Retake AI Face & Selfie Editor,0.13204348334783117,0.08427264261899985,0.17981432407666248,150,ReShoot: AI Face Photo Editor,0.10652046669528231,0.06925235485168967,0.14378857853887494,149,not significant (CIs overlap)

@@ -1,0 +1,9 @@
+pair,country,rate,ci_low,ci_high,n,low_n
+chatbot,us,0.20588235294117646,,,34,False
+chatbot,br,0.4523809523809524,,,42,False
+chatbot,de,0.38333333333333336,,,60,False
+chatbot,fr,0.24528301886792453,,,53,False
+face,us,0.3851851851851852,,,135,False
+face,br,0.4107142857142857,,,56,False
+face,de,0.45454545454545453,,,22,True
+face,fr,0.6666666666666666,,,18,True

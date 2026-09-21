@@ -1,0 +1,78 @@
+description,value,unit,ci_low,ci_high,n,low_n,verdict
+Records dropped by the keyboard-mash filter,9.0,count,,,9,True,
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=paywall_timing rate",0.04283978522185198,rate,0.013623911438229778,0.07205565900547418,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=paywall_timing rate",0.02450484915601195,rate,0.0015361192767717295,0.047473579035252164,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=price_level rate",0.023873873873873876,rate,0.0,0.0481523416228548,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=price_level rate",0.024974439858160787,rate,0.0009675126616658994,0.048981367054655674,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=subscription_trap rate",0.0328467647349283,rate,0.007324587688786941,0.05836894178106966,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=subscription_trap rate",0.07383502802107453,rate,0.033821753328400345,0.11384830271374871,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=free_quota_limit rate",0.04347199151362225,rate,0.012708546495568133,0.07423543653167637,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=free_quota_limit rate",0.03910231886976073,rate,0.008872217097342809,0.06933242064217865,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=referral_gate rate",0.006743441310506219,rate,0.0,0.019326089936277373,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=referral_gate rate",0.0,rate,0.0,0.0,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=quality_gap rate",0.02498859864914798,rate,0.001213480619305686,0.04876371667899027,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=quality_gap rate",0.03558620535364722,rate,0.007757494912155365,0.06341491579513907,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=onboarding_confusion rate",0.07147193381335518,rate,0.03161736938984154,0.11132649823686881,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=onboarding_confusion rate",0.06703759633992193,rate,0.0300144883458206,0.10406070433402326,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=performance rate",0.007375647602276498,rate,0.0,0.02141694343614862,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=performance rate",0.04191404633265099,rate,0.011057011387644627,0.07277108127765734,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything friction_type=none rate",0.7463879632804378,rate,0.6873893060429819,0.8053866205178937,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova friction_type=none rate",0.6930455160687718,rate,0.6296322043121301,0.7564588278254136,148,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=paywall_timing rate",0.14115687680905073,rate,0.09327763854275216,0.1890361150753493,150,False,significant
+"face pair, ReShoot: AI Face Photo Editor friction_type=paywall_timing rate",0.0627151051625239,rate,0.033709475756790536,0.09172073456825727,149,False,significant
+"face pair, Retake AI Face & Selfie Editor friction_type=price_level rate",0.08982231243100809,rate,0.04709074518662478,0.1325538796753914,150,False,significant
+"face pair, ReShoot: AI Face Photo Editor friction_type=price_level rate",0.015678776290630976,rate,0.0,0.03148285221230391,149,False,significant
+"face pair, Retake AI Face & Selfie Editor friction_type=subscription_trap rate",0.0613660526704005,rate,0.025238958826430846,0.09749314651437016,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor friction_type=subscription_trap rate",0.048183556405353725,rate,0.02063059390452479,0.07573651890618266,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=free_quota_limit rate",0.08982231243100809,rate,0.04709074518662478,0.1325538796753914,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor friction_type=free_quota_limit rate",0.05319389706169274,rate,0.022824919571488276,0.0835628745518972,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=referral_gate rate",0.010221130221130222,rate,0.0,0.0237928122717177,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor friction_type=referral_gate rate",0.014063292621063721,rate,0.0,0.03055538289708192,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=quality_gap rate",0.039587142195837845,rate,0.009883144142599033,0.06929114024907665,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor friction_type=quality_gap rate",0.0512818511725914,rate,0.02091287368238694,0.08165082866279587,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=onboarding_confusion rate",0.06847029977464761,rate,0.03144436525478722,0.105496234294508,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor friction_type=onboarding_confusion rate",0.07001990088578453,rate,0.034978312024818256,0.1050614897467508,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=performance rate",0.017562633214807128,rate,0.0,0.036714140117817415,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor friction_type=performance rate",0.013766730401529637,rate,0.0,0.02957080632320257,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor friction_type=none rate",0.4819912402521097,rate,0.41685578026329584,0.5471267002409236,150,False,significant
+"face pair, ReShoot: AI Face Photo Editor friction_type=none rate",0.6710968899988293,rate,0.621300625975121,0.7208931540225376,149,False,significant
+"chatbot pair, Chat AI: Ask Agent Anything trigger_moment=before_first_use rate",0.09582832617073286,rate,0.05126194069012186,0.14039471165134387,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova trigger_moment=before_first_use rate",0.11628209000302023,rate,0.07029808797471843,0.16226609203132203,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything trigger_moment=after_first_result rate",0.09907790534715033,rate,0.05362145103625437,0.14453435965804629,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova trigger_moment=after_first_result rate",0.06375627817488283,rate,0.02818061517332747,0.09933194117643819,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything trigger_moment=after_free_quota rate",0.03609634391134575,rate,0.008658846733431421,0.06353384108926008,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova trigger_moment=after_free_quota rate",0.04956497421613701,rate,0.014971830631790792,0.08415811780048323,148,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything trigger_moment=none rate",0.7689974245707711,rate,0.7100739473569103,0.827920901784632,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova trigger_moment=none rate",0.77039665760596,rate,0.7111077040436931,0.8296856111682269,148,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor trigger_moment=before_first_use rate",0.2914831036570167,rate,0.22608979029843979,0.3568764170155936,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor trigger_moment=before_first_use rate",0.19204744995512543,rate,0.1432744775863964,0.24082042232385448,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor trigger_moment=after_first_result rate",0.08426104252191208,rate,0.04341174287377118,0.12511034217005298,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor trigger_moment=after_first_result rate",0.09143481484371951,rate,0.05403418112215851,0.1288354485652805,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor trigger_moment=after_free_quota rate",0.05067041067041067,rate,0.020420067571675152,0.08092075376914619,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor trigger_moment=after_free_quota rate",0.03883404222109493,rate,0.01334943885885672,0.06431864558333314,149,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor trigger_moment=none rate",0.5735854431506605,rate,0.5046675530562382,0.6425033332450828,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor trigger_moment=none rate",0.67768369298006,rate,0.6254386941521034,0.7299286918080167,149,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything would_pay_signal='conditional' rate",0.09248415184491056,rate,0.04627857534414197,0.13868972834567916,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova would_pay_signal='conditional' rate",0.060325849860733576,rate,0.024552316605689087,0.09609938311577806,148,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor would_pay_signal='conditional' rate",0.12250319206840946,rate,0.07398622013346212,0.1710201640033568,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor would_pay_signal='conditional' rate",0.11926483786631288,rate,0.07757779536747884,0.1609518803651469,149,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything price_level rate",0.023873873873873876,rate,0.0,0.0481523416228548,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova price_level rate",0.024974439858160787,rate,0.0009675126616658994,0.048981367054655674,148,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor price_level rate",0.08982231243100809,rate,0.04709074518662478,0.1325538796753914,150,False,significant
+"face pair, ReShoot: AI Face Photo Editor price_level rate",0.015678776290630976,rate,0.0,0.03148285221230391,149,False,significant
+"chatbot pair, Chat AI: Ask Agent Anything free_quota_limit rate",0.04347199151362225,rate,0.012708546495568133,0.07423543653167637,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova free_quota_limit rate",0.03910231886976073,rate,0.008872217097342809,0.06933242064217865,148,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor free_quota_limit rate",0.08982231243100809,rate,0.04709074518662478,0.1325538796753914,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor free_quota_limit rate",0.05319389706169274,rate,0.022824919571488276,0.0835628745518972,149,False,not significant (CIs overlap)
+"chatbot pair, Chat AI: Ask Agent Anything paid_but_still_limited rate",0.06656397128745939,rate,0.03365239812803573,0.09947554444688306,149,False,not significant (CIs overlap)
+"chatbot pair, AI Chatbot - Nova paid_but_still_limited rate",0.06009105450965916,rate,0.024858191325047116,0.0953239176942712,148,False,not significant (CIs overlap)
+"face pair, Retake AI Face & Selfie Editor paid_but_still_limited rate",0.13204348334783117,rate,0.08427264261899985,0.17981432407666248,150,False,not significant (CIs overlap)
+"face pair, ReShoot: AI Face Photo Editor paid_but_still_limited rate",0.10652046669528231,rate,0.06925235485168967,0.14378857853887494,149,False,not significant (CIs overlap)
+"chatbot pair, us market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.20588235294117646,rate,,,34,False,
+"chatbot pair, br market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.4523809523809524,rate,,,42,False,
+"chatbot pair, de market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.38333333333333336,rate,,,60,False,
+"chatbot pair, fr market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.24528301886792453,rate,,,53,False,
+"face pair, us market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.3851851851851852,rate,,,135,False,
+"face pair, br market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.4107142857142857,rate,,,56,False,
+"face pair, de market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.45454545454545453,rate,,,22,True,
+"face pair, fr market any-friction raw rate (the sample was not stratified by country, this rate is in-sample and cannot be generalized to the population)",0.6666666666666666,rate,,,18,True,
