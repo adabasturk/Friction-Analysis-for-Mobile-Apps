@@ -10,9 +10,11 @@ Comparing arbitrary popular apps can't separate a studio's monetization choices 
 
 The Flask UI takes a natural-language question; the system either generates and runs weighted SQL or does a semantic search over reviews, and says so when it doesn't have enough data to answer.
 
-## Runs entirely locally
+## Runs entirely locally at runtime
 
-No external API calls. `gemma3:4b` (structured extraction), `nomic-embed-text` (embeddings), Ollama, SQLite. Hardware: 2020 MacBook Pro, Intel i5, 8 GB RAM, no GPU. 998 records were extracted over two nights, 6 hours 41 minutes of LLM time. The model was chosen by benchmarking four candidates, not by default — see [FINDINGS.md](FINDINGS.md) for the comparison.
+No external API calls at runtime. `gemma3:4b` (structured extraction), `nomic-embed-text` (embeddings), Ollama, SQLite. Hardware: 2020 MacBook Pro, Intel i5, 8 GB RAM, no GPU. 998 records were extracted over two nights, 6 hours 41 minutes of LLM time. The model was chosen by benchmarking four candidates, not by default — see [FINDINGS.md](FINDINGS.md) for the comparison.
+
+One exception, outside the runtime path: the query layer's qualitative pool (1,022 reviews) was translated to English once, by hand, with Claude — not Ollama, and not at query time. Nothing in the running system calls an external API; that translation pass was a one-time data-preparation step, done ahead of time the same way the hand-labelled benchmark set above was.
 
 ## Findings
 

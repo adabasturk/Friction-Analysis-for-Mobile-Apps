@@ -177,10 +177,25 @@ a Japanese one, a Portuguese one, a French one. `nomic-embed-text` encodes langu
 first and topic second on a multilingual corpus.
 
 That broke retrieval: a Turkish question returned 100% Turkish reviews regardless
-of topic. The fix has two layers — detect a country in the question and restrict
-the pool before computing similarity, then translate the query into that market's
-language before embedding. Top-1 similarity for the Brazil query rose from 0.51 to
-0.73, and for the Japan query from 0.63 to 0.79.
+of topic. The first fix had two layers — detect a country in the question and
+restrict the pool before computing similarity, then translate the query into that
+market's specific language before embedding. It worked (top-1 similarity for the
+Brazil query rose from 0.51 to 0.73, for Japan from 0.63 to 0.79), but it only
+scaled by adding a new target-language mapping for every market in the data, and a
+question naming no country still needed a five-language fan-out to avoid staying
+locked to its own language.
+
+The redesign translates the corpus instead of chasing the query's target language.
+Every valid extraction's review (1,022 records) was translated to English once, by
+hand, and embeddings were recomputed over the translations instead of the original
+text. That doesn't make query-side translation disappear, though — embedding a
+non-English question directly against the now-English-only pool was tried first
+and still ranked generic positive reviews above on-topic ones. The question itself
+is translated to English at search time too, reusing the same mechanism the old
+per-market fix used, just always pointed at English now instead of a country's
+market language. With both sides of the comparison in one language, matching no
+longer depends on which language the question happened to be asked in, or which
+market it names.
 
 **Labelling a cluster is not the same as reading it.** The five reviews closest to
 cluster 6's centroid were keyboard mash (`Ggshsjsjsjjdjddndjjd`), so the cluster
@@ -244,6 +259,19 @@ three-word, five-star French review came back tagged `subscription_trap` at
 
 Working with small local models, the reliable move is not to ask again but to
 repair the output mechanically.
+
+**The same ceiling applies to the query layer's qualitative path.** Synthesizing a
+free-text answer from a handful of retrieved reviews is the same kind of task as
+hypothesis generation above — holding several records in relation to each other
+and compressing them into a claim — not the reading-comprehension task gemma3:4b
+was shown to handle well. Rather than keep asking a 4B model to do work already
+measured to fail, the query layer was redesigned around what it's actually good
+at: detecting a filter from the question (country, app, friction type, would-pay
+signal — plain keyword matching, no LLM call) and ranking the filtered pool by
+embedding similarity. A qualitative answer is now the matching reviews themselves,
+with their translation, metadata, and the exact filter that was applied — never a
+generated sentence standing in for them. The fix for a measured model limitation
+was to redefine the task, not to push the model past where it's reliable.
 
 ---
 
