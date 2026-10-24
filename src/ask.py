@@ -40,6 +40,22 @@ MIN_MATCHES_WARN = 5
 # of however many matched the detected filters (see answer_qualitative).
 QUALITATIVE_TOP_K_RESULTS = 25
 
+# When no country/app/field filter was detected at all, the "pool" is the
+# entire 1,022-record translated corpus - showing 25 of those as if they
+# were all relevant is misleading for a question with no actual topic
+# anchor, so the no-filter case caps lower.
+QUALITATIVE_NO_FILTER_MAX_RESULTS = 10
+
+# Similarity gate for the Part 6.5 pool (embedding_en), re-added after
+# removing it broke "Who is Codeway's CEO?" - with no filter and no gate,
+# the system just listed the top 25 of the whole pool regardless of how
+# dissimilar even the best match was. Two tiers, same reasoning as the old
+# MIN_TOP1_SIMILARITY_* pair above (still unused, belongs to the retired
+# multilingual load_corpus path): a filter already narrows the pool by
+# metadata before similarity runs, so the bar it has to clear is lower.
+QUALITATIVE_NO_FILTER_SIMILARITY_THRESHOLD = 0.65
+QUALITATIVE_FILTERED_SIMILARITY_THRESHOLD = 0.58
+
 # Calibrated against probe questions run on this exact corpus, not guessed:
 # on-topic questions (about prices/cancellation, in Turkish and English) scored
 # nearest-neighbor cosine 0.72-0.83; generic off-topic questions in a language
@@ -1403,11 +1419,15 @@ def pool_totals(conn):
 
 def answer_qualitative(question, host, db_path, debug=False):
     country, app, field_name, field_value = detect_text_filters(question)
+    has_filter = bool(country or app or field_name)
     warnings = []
 
     # One line, always present, right above the pool line - so the user
     # can see at a glance whether what they asked actually matched a
-    # filter, not just trust that it did.
+    # filter, not just trust that it did. "(semantic search only)" marks
+    # the no-filter case specifically, since that's the one where every
+    # record in the pool trivially "matches" and the only real gate left
+    # is the similarity threshold below.
     active_filters = []
     if country:
         active_filters.append(f"country={country}")
@@ -1415,7 +1435,7 @@ def answer_qualitative(question, host, db_path, debug=False):
         active_filters.append(f"app={app}")
     if field_name:
         active_filters.append(f"{field_name}={field_value}")
-    filters_line = "filters: " + (", ".join(active_filters) if active_filters else "none")
+    filters_line = "filters: " + (", ".join(active_filters) if active_filters else "none (semantic search only)")
 
     if country:
         warnings.append(f"country filter: {country}")
@@ -1460,7 +1480,30 @@ def answer_qualitative(question, host, db_path, debug=False):
 
     query_vector = embed_text(search_text, host)
     sims = norm_vectors @ query_vector
-    order = np.argsort(-sims)[:QUALITATIVE_TOP_K_RESULTS]
+    order = np.argsort(-sims)
+    top1_sim = float(sims[order[0]])
+
+    # A filter already narrows the pool by metadata before similarity ever
+    # runs, so it doesn't need to clear as high a bar as an unfiltered
+    # search over the whole corpus does - same two-tier reasoning as the
+    # (now unused) MIN_TOP1_SIMILARITY_* pair above, just re-scoped to
+    # "any filter" instead of "country filter specifically".
+    threshold = QUALITATIVE_FILTERED_SIMILARITY_THRESHOLD if has_filter else QUALITATIVE_NO_FILTER_SIMILARITY_THRESHOLD
+    warnings.append(f"similarity threshold used: {threshold} ({'filtered' if has_filter else 'no filter'})")
+
+    if debug:
+        print(f"[debug] top1={top1_sim:.3f} threshold={threshold}\n")
+
+    if top1_sim < threshold:
+        return Answer(
+            query_type="QUALITATIVE",
+            text=f"No data to answer this question.\nclosest match {top1_sim:.2f}, threshold {threshold}",
+            n=0,
+            warnings=warnings,
+        )
+
+    display_cap = QUALITATIVE_TOP_K_RESULTS if has_filter else QUALITATIVE_NO_FILTER_MAX_RESULTS
+    order = order[:display_cap]
 
     records = []
     for i in order:
@@ -1478,8 +1521,8 @@ def answer_qualitative(question, host, db_path, debug=False):
         })
 
     text = f"{filters_line}\n{pool_line}"
-    if matched > QUALITATIVE_TOP_K_RESULTS:
-        text += f"\nShowing {QUALITATIVE_TOP_K_RESULTS} of {matched}."
+    if matched > display_cap:
+        text += f"\nShowing {display_cap} of {matched}."
 
     return Answer(
         query_type="QUALITATIVE",
