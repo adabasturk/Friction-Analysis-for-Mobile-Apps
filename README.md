@@ -6,9 +6,11 @@ Comparing arbitrary popular apps can't separate a studio's monetization choices 
 
 ## Demo
 
-<!-- screen recording goes here -->
+<video src="demo/demo-short.mp4" controls></video>
 
-The Flask UI takes a natural-language question; the system either generates and runs weighted SQL or does a semantic search over reviews, and says so when it doesn't have enough data to answer.
+Full walkthrough — all eight example questions: [demo-full.mp4](demo/demo-full.mp4)
+
+Numeric questions mostly run live-generated SQL, or resolve through a fixed template for comparison-shaped ones; text questions apply a filter and list the matching reviews with their translation and metadata; when there's no data to answer a question, the system says so rather than answering anyway.
 
 ## Runs entirely locally at runtime
 
