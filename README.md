@@ -6,7 +6,7 @@ Comparing arbitrary popular apps can't separate a studio's monetization choices 
 
 ## Demo
 
-<video src="demo/demo-short.mp4" controls></video>
+https://github.com/user-attachments/assets/0fcb8187-23a7-4209-837f-965690455e8a
 
 Full walkthrough — all eight example questions: [demo-full.mp4](demo/demo-full.mp4)
 
