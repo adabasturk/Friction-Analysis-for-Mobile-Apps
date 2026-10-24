@@ -46,6 +46,11 @@ QUALITATIVE_TOP_K_RESULTS = 25
 # anchor, so the no-filter case caps lower.
 QUALITATIVE_NO_FILTER_MAX_RESULTS = 10
 
+# When a question names no specific app, results are grouped by app (see
+# select_grouped_records) so one app's reviews can't crowd out every
+# other app's under the overall display_cap above.
+QUALITATIVE_GROUP_MAX_PER_APP = 10
+
 # Similarity gate for the Part 6.5 pool (embedding_en), re-added after
 # removing it broke "Who is Codeway's CEO?" - with no filter and no gate,
 # the system just listed the top 25 of the whole pool regardless of how
@@ -547,6 +552,12 @@ class Answer:
                                                    # (see answer_qualitative) - every review in
                                                    # the pool was translated once, by hand,
                                                    # ahead of time (see README).
+    grouped_by_app: bool = False  # True only when `records` was built by
+                                   # select_grouped_records (no app named in
+                                   # the question) - tells the caller the
+                                   # records are contiguous per-app runs,
+                                   # most-matches-first, not a plain
+                                   # similarity-ranked flat list.
     warnings: list = field(default_factory=list)
 
 
@@ -810,7 +821,24 @@ APP_ALIASES = {
     "chat ai": "Chat AI: Ask Agent Anything",
 }
 
-STAR_RATING_RE = re.compile(r"\b[1-5]\s*yıldız", re.IGNORECASE)
+# The exact reviews.app string -> the short name shown in a per-app group
+# header or a record's meta line (web.py). Not the reverse of APP_ALIASES:
+# that maps several typed-in aliases to one canonical app value, this maps
+# that one canonical value to a single display name.
+APP_SHORT_NAMES = {
+    "Chat AI: Ask Agent Anything": "Chat AI",
+    "AI Chatbot - Nova": "Nova",
+    "Retake AI Face & Selfie Editor": "Retake AI",
+    "ReShoot: AI Face Photo Editor": "ReShoot",
+}
+
+# Capturing group added (not just a yes/no match) so a specific rating can
+# be read out, not just detected - extract_star_rating below needs the
+# actual number, not only whether one was mentioned. "star" added
+# alongside "yıldız" once the interface went English-only; "yıldız" is
+# kept, never replaced, the same policy as every other Turkish/English
+# keyword pair in this file.
+STAR_RATING_RE = re.compile(r"\b([1-5])\s*-?\s*(?:star|yıldız)", re.IGNORECASE)
 LOW_HIGH_RATING_PHRASES = ["düşük puanlı", "yüksek puanlı", "düşük puan", "yüksek puan"]
 YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 DATE_PHRASES = [
@@ -822,6 +850,15 @@ DATE_PHRASES = [
 
 def mentions_rating(normalized):
     return bool(STAR_RATING_RE.search(normalized)) or any(p in normalized for p in LOW_HIGH_RATING_PHRASES)
+
+
+def extract_star_rating(normalized):
+    """The specific star count (1-5) a question names, or None - distinct
+    from mentions_rating, which only says yes/no. The templated comparison
+    query's Pattern C needs the actual number as a SQL parameter, not just
+    confirmation that a rating was mentioned."""
+    match = STAR_RATING_RE.search(normalized)
+    return int(match.group(1)) if match else None
 
 
 def mentions_app(normalized):
@@ -836,6 +873,15 @@ def matched_app(normalized):
         if alias in normalized:
             return app
     return None
+
+
+def matched_apps(normalized):
+    """Every distinct canonical app name the question names, as a set -
+    distinct from matched_app (singular), which only ever returns the
+    first alias it finds. The templated comparison query's Pattern B
+    needs to know there are exactly two, not just that there's at least
+    one."""
+    return {app for alias, app in APP_ALIASES.items() if alias in normalized}
 
 
 APP_TO_PAIR = {
@@ -1079,6 +1125,34 @@ def run_select(sql, db_path):
     return columns, rows
 
 
+def run_select_with_params(sql, params, db_path):
+    """Same read-only execution as run_select, for the templated
+    comparison queries below - those pass real ? placeholders rather than
+    a fully-formed SQL string, so no literal (a friction_type value, an
+    app name, a star rating) is ever string-concatenated into the query."""
+    uri = f"file:{Path(db_path).resolve()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        cur = conn.execute(sql, params)
+        columns = [d[0] for d in cur.description] if cur.description else []
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return columns, rows
+
+
+def render_template_sql_for_display(sql, params):
+    """Substitutes each ? with its bound value, in order, purely for the
+    SQL shown back to the user - execution itself always goes through
+    run_select_with_params with the placeholders intact. Good enough for
+    display only: not safe to use for anything that gets executed."""
+    rendered = sql
+    for value in params:
+        literal = f"'{value}'" if isinstance(value, str) else str(value)
+        rendered = rendered.replace("?", literal, 1)
+    return rendered
+
+
 def format_aggregate_text(columns, rows):
     """Human-readable rendering. A `rate` column (the canonical alias for a
     computed proportion) is shown as a percentage with its n right next to
@@ -1147,7 +1221,114 @@ def low_n_warnings(columns, rows, threshold=LOW_N_THRESHOLD):
     return warnings
 
 
+# ---------------------------------------------------------------------------
+# Templated comparison queries - resolved in code, no LLM SQL generation
+# ---------------------------------------------------------------------------
+#
+# Added after the model silently mis-generated SQL three separate times in
+# one session (dropped COUNT(*) AS n, omitted a rating filter the question
+# asked for, added a country filter the question never mentioned) - a
+# comparison question has one of exactly three fixed shapes, so there is
+# nothing for a model to get right or wrong here. The SQL text is written
+# once, below, and never varies; only the parameters change, and they are
+# always passed as real ? placeholders (run_select_with_params), never
+# string-concatenated into the query.
+TEMPLATE_QUERY_NOTE = "template query — not model-generated"
+
+# in_estimation_frame / validation_status / selection_weight / COUNT(*) AS
+# n are fixed in this one string, shared by all three patterns - exactly
+# the three things the model got wrong this session, now impossible to
+# get wrong because nothing generates this text but this file.
+TEMPLATE_COMPARISON_SQL = """
+    SELECT r.app,
+           SUM(CASE WHEN e.friction_type = ? THEN e.selection_weight ELSE 0 END)
+             / SUM(e.selection_weight) AS rate,
+           COUNT(*) AS n
+    FROM extractions e JOIN reviews r ON r.review_id = e.review_id
+    WHERE e.in_estimation_frame = 1 AND e.validation_status = 'valid'{extra_where}
+    GROUP BY r.app
+    ORDER BY rate DESC
+""".strip()
+
+ALL_APPS = set(APP_ALIASES.values())
+PATTERN_A_APP_PHRASES = ["which app", "hangi uygulama"]
+PATTERN_A_SUPERLATIVE_PHRASES = ["highest", "lowest", "most", "least", "en çok", "en az"]
+PATTERN_B_TRIGGER_PHRASES = ["vs", "versus", "compared to", "karşı"]
+PATTERN_C_TRIGGER_PHRASES = ["what share", "what percentage", "yüzde kaçı"]
+
+
+def try_template_comparison_query(question):
+    """(sql, params, note) for one of the three fixed comparison shapes,
+    or None when the question matches none of them - in which case the
+    caller (answer_aggregate) falls through to the existing LLM SQL path
+    unchanged. All three require a friction_type match from the existing
+    FIELD_KEYWORD_RULES detector (never a would_pay_signal one - these are
+    rate-of-friction-type comparisons specifically)."""
+    normalized = _normalize_for_match(question)
+    field = detect_structured_field(question)
+    if not field or field[0] != "friction_type":
+        return None
+    _field_name, friction_value = field
+    apps = matched_apps(normalized)
+
+    # Pattern B: "<app> vs <app>: <metric>" - exactly two distinct apps
+    # named, plus a comparison trigger.
+    if len(apps) == 2 and any(p in normalized for p in PATTERN_B_TRIGGER_PHRASES):
+        app_a, app_b = sorted(apps)
+        sql = TEMPLATE_COMPARISON_SQL.format(extra_where=" AND r.app IN (?, ?)")
+        return sql, [friction_value, app_a, app_b], TEMPLATE_QUERY_NOTE
+
+    # Pattern C: "what share of <app>'s <rating>-star reviews are about
+    # <friction_type>" - exactly one app plus a specific star rating.
+    rating = extract_star_rating(normalized)
+    if len(apps) == 1 and rating is not None and any(p in normalized for p in PATTERN_C_TRIGGER_PHRASES):
+        (app,) = apps
+        sql = TEMPLATE_COMPARISON_SQL.format(extra_where=" AND r.app = ? AND r.rating = ?")
+        return sql, [friction_value, app, rating], TEMPLATE_QUERY_NOTE
+
+    # Pattern A: "which app has the highest/lowest <friction_type>" - a
+    # superlative across every app, not one or two specific ones. Naming
+    # every single app ("which app among Chat AI, Nova, Retake AI, and
+    # ReShoot...") is the same comparison GROUP BY r.app already runs, so
+    # that counts as "no specific app" too - only a strict subset (one or
+    # two) should fall through to Pattern B/C above instead.
+    if (
+        (not apps or apps == ALL_APPS)
+        and any(p in normalized for p in PATTERN_A_APP_PHRASES)
+        and any(p in normalized for p in PATTERN_A_SUPERLATIVE_PHRASES)
+    ):
+        sql = TEMPLATE_COMPARISON_SQL.format(extra_where="")
+        return sql, [friction_value], TEMPLATE_QUERY_NOTE
+
+    return None
+
+
 def answer_aggregate(question, host, db_path, debug=False):
+    template = try_template_comparison_query(question)
+    if template:
+        sql, params, note = template
+        if debug:
+            print(f"[debug] template match: {sql} params={params}\n")
+        try:
+            columns, rows = run_select_with_params(sql, params, db_path)
+        except sqlite3.Error as exc:
+            return Answer(query_type="AGGREGATE", text=f"SQL execution failed: {exc}", sql=sql)
+
+        text = format_aggregate_text(columns, rows)
+        n = extract_n(columns, rows)
+        warnings = [note, "estimation frame, weighted"]
+        warnings.extend(low_n_warnings(columns, rows))
+        if n is None:
+            warnings.append("record count (n) could not be extracted from the SQL output")
+        return Answer(
+            query_type="AGGREGATE",
+            text=text,
+            sql=render_template_sql_for_display(sql, params),
+            n=n,
+            warnings=warnings,
+            raw_result={"columns": columns, "rows": [list(row) for row in rows]},
+        )
+
     warnings = []
     sql = generate_sql(question, host)
     if debug:
@@ -1417,6 +1598,36 @@ def pool_totals(conn):
     return total_pool, total_substantive
 
 
+def select_grouped_records(order_full, rows, display_cap, max_per_app):
+    """Indices from order_full (already rank-ordered, best similarity
+    first) selected so that the overall count never exceeds display_cap,
+    no single app contributes more than max_per_app, and the result comes
+    back as contiguous per-app runs ordered by how many of that app's
+    reviews made the cut (most first) - so a caller that just watches for
+    `app` changing between consecutive records gets the right grouping
+    and order for free, no second pass needed. Within each app's run, the
+    original similarity order is preserved.
+
+    Only called when no app filter is active - with one named app every
+    row already shares the same value, so grouping would be a no-op."""
+    buckets = {}
+    first_rank = {}
+    selected_total = 0
+    for rank, i in enumerate(order_full):
+        row_app = rows[i][6]
+        first_rank.setdefault(row_app, rank)
+        bucket = buckets.setdefault(row_app, [])
+        if len(bucket) >= max_per_app:
+            continue
+        bucket.append(i)
+        selected_total += 1
+        if selected_total >= display_cap:
+            break
+
+    ordered_apps = sorted(buckets, key=lambda a: (-len(buckets[a]), first_rank[a]))
+    return [i for a in ordered_apps for i in buckets[a]]
+
+
 def answer_qualitative(question, host, db_path, debug=False):
     country, app, field_name, field_value = detect_text_filters(question)
     has_filter = bool(country or app or field_name)
@@ -1444,6 +1655,35 @@ def answer_qualitative(question, host, db_path, debug=False):
     if field_name:
         warnings.append(f"field filter: {field_name}='{field_value}'")
 
+    # Similarity threshold: skipped entirely when a field filter
+    # (friction_type / would_pay_signal / mentions_price) is active. That
+    # filter already IS the semantic match - it comes from the LLM reading
+    # the review, not from keyword overlap - so re-checking embedding
+    # similarity against the question's own wording on top of it is
+    # redundant and can reject a correctly-filtered record just because
+    # its phrasing doesn't echo the question's (measured: "Why did Turkish
+    # users who almost paid change their mind?" scored top1=0.551 against
+    # its own correctly-filtered 10-record pool, just under 0.58, even
+    # though every one of those 10 records is a would_pay_signal=
+    # 'conditional' review).
+    #
+    # A country and/or app filter alone doesn't carry that guarantee - "ne
+    # diyor" about one country or one app still names no topic, so the
+    # threshold stays on for that case (0.58, looser than the no-filter
+    # bar since the pool is at least narrower). No filter at all keeps the
+    # strict 0.65 bar - the only thing standing between the user and 25
+    # arbitrary top-of-pool reviews is this number.
+    if field_name:
+        threshold = None
+        threshold_note = "threshold: not applied (field filter active)"
+    elif country or app:
+        threshold = QUALITATIVE_FILTERED_SIMILARITY_THRESHOLD
+        threshold_note = f"threshold: {threshold}"
+    else:
+        threshold = QUALITATIVE_NO_FILTER_SIMILARITY_THRESHOLD
+        threshold_note = f"threshold: {threshold}"
+    warnings.append(threshold_note)
+
     conn = get_connection(db_path)
     try:
         rows = load_text_pool(conn, country, app, field_name, field_value)
@@ -1456,13 +1696,14 @@ def answer_qualitative(question, host, db_path, debug=False):
         f"{matched} reviews matched — from {total_pool} extracted records "
         f"({total_substantive} substantive reviews total)"
     )
+    status = f"{filters_line}\n{threshold_note}"
 
     if debug:
         print(f"[debug] filters: country={country} app={app} field={field_name}={field_value}")
-        print(f"[debug] {matched} rows matched before ranking\n")
+        print(f"[debug] {matched} rows matched before ranking, threshold={threshold}\n")
 
     if matched == 0:
-        return Answer(query_type="QUALITATIVE", text=f"{filters_line}\n{pool_line}", n=0, warnings=warnings)
+        return Answer(query_type="QUALITATIVE", text=f"{status}\n{pool_line}", n=0, warnings=warnings)
 
     vectors = np.stack([np.frombuffer(r[9], dtype=np.float32) for r in rows])
     norm_vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -1483,27 +1724,28 @@ def answer_qualitative(question, host, db_path, debug=False):
     order = np.argsort(-sims)
     top1_sim = float(sims[order[0]])
 
-    # A filter already narrows the pool by metadata before similarity ever
-    # runs, so it doesn't need to clear as high a bar as an unfiltered
-    # search over the whole corpus does - same two-tier reasoning as the
-    # (now unused) MIN_TOP1_SIMILARITY_* pair above, just re-scoped to
-    # "any filter" instead of "country filter specifically".
-    threshold = QUALITATIVE_FILTERED_SIMILARITY_THRESHOLD if has_filter else QUALITATIVE_NO_FILTER_SIMILARITY_THRESHOLD
-    warnings.append(f"similarity threshold used: {threshold} ({'filtered' if has_filter else 'no filter'})")
-
     if debug:
-        print(f"[debug] top1={top1_sim:.3f} threshold={threshold}\n")
+        print(f"[debug] top1={top1_sim:.3f}\n")
 
-    if top1_sim < threshold:
+    if threshold is not None and top1_sim < threshold:
         return Answer(
             query_type="QUALITATIVE",
-            text=f"No data to answer this question.\nclosest match {top1_sim:.2f}, threshold {threshold}",
+            text=f"{status}\nNo data to answer this question.\nclosest match {top1_sim:.2f}, threshold {threshold}",
             n=0,
             warnings=warnings,
         )
 
     display_cap = QUALITATIVE_TOP_K_RESULTS if has_filter else QUALITATIVE_NO_FILTER_MAX_RESULTS
-    order = order[:display_cap]
+
+    # No app named -> group by app so one app's reviews can't crowd out
+    # every other one under the shared display_cap (see
+    # select_grouped_records). An app filter already fixes every row to
+    # the same app, so grouping would be a no-op there - keep the plain
+    # top-N slice for that case.
+    if app:
+        order = order[:display_cap]
+    else:
+        order = select_grouped_records(order, rows, display_cap, QUALITATIVE_GROUP_MAX_PER_APP)
 
     records = []
     for i in order:
@@ -1520,9 +1762,12 @@ def answer_qualitative(question, host, db_path, debug=False):
             "would_pay_signal": would_pay_signal,
         })
 
-    text = f"{filters_line}\n{pool_line}"
-    if matched > display_cap:
-        text += f"\nShowing {display_cap} of {matched}."
+    text = f"{status}\n{pool_line}"
+    # len(records), not display_cap: the per-app grouping cap can leave
+    # the actual shown count below display_cap even when matched is
+    # larger (e.g. a filtered pool concentrated in one or two apps).
+    if matched > len(records):
+        text += f"\nShowing {len(records)} of {matched}."
 
     return Answer(
         query_type="QUALITATIVE",
@@ -1530,6 +1775,7 @@ def answer_qualitative(question, host, db_path, debug=False):
         review_ids=[r["review_id"] for r in records],
         n=matched,
         records=records,
+        grouped_by_app=not bool(app),
         warnings=warnings,
     )
 
@@ -1582,9 +1828,16 @@ def print_answer(result):
 
     if result.records:
         print("\nrecords:")
+        prev_app = object()  # sentinel - never equal to a real app string
         for r in result.records:
+            if result.grouped_by_app and r["app"] != prev_app:
+                run_len = sum(1 for rr in result.records if rr["app"] == r["app"])
+                short = APP_SHORT_NAMES.get(r["app"], r["app"])
+                print(f"\n-- {short} — {run_len} review{'s' if run_len != 1 else ''} --")
+            prev_app = r["app"]
+            short = APP_SHORT_NAMES.get(r["app"], r["app"])
             print(
-                f"\n  [{r['country']} · {r['rating']}★ · {r['review_id']} · "
+                f"\n  [{short} · {r['country']} · {r['rating']}★ · {r['review_id']} · "
                 f"friction_type={r['friction_type']} · would_pay_signal={r['would_pay_signal']}]"
             )
             print(f"  {r['text_en']}")

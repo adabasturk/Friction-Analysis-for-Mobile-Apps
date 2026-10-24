@@ -15,16 +15,19 @@ import json
 
 from flask import Flask, jsonify, request
 
-from ask import DB_PATH, LANGUAGE_NAMES, OLLAMA_HOST, answer, check_ollama_health
+from ask import APP_SHORT_NAMES, DB_PATH, LANGUAGE_NAMES, OLLAMA_HOST, answer, check_ollama_health
 
 app = Flask(__name__)
 
 EXAMPLE_QUESTIONS = [
-    "Who is Codeway's CEO?",
-    "What is Nova's paywall complaint rate?",
-    "How many reviews did you collect?",
+    "Which app among Chat AI, Nova, Retake AI, and ReShoot has the highest paywall timing complaint rate?",
+    "Retake AI vs ReShoot: what share of reviews mention pricing?",
+    "What share of Retake AI's 1-star reviews are about paywall timing?",
+    "What do users complain about in ReShoot?",
+    "Why did Nova users who almost paid change their mind?",
     "What do Brazilian users say about pricing?",
-    "Why did Brazilian users who almost paid change their mind?",
+    "How many reviews did you collect?",
+    "Who is Codeway's CEO?",
 ]
 
 
@@ -62,21 +65,44 @@ def footer_note(result):
 
 def display_records(result):
     """result.records, reshaped for the page: a ready-made display note
-    ("translated from Japanese") instead of a raw source_lang code, and
-    only the fields the page actually renders. Full text throughout, by
-    design - no truncation."""
+    ("translated from Japanese") instead of a raw source_lang code, an
+    app short name instead of the full reviews.app string, and only the
+    fields the page actually renders. Full text throughout, by design -
+    no truncation.
+
+    When result.grouped_by_app is set, records already arrive as
+    contiguous per-app runs (see select_grouped_records in ask.py) - this
+    just labels the first record of each run with a "group_header" the
+    page renders before that card, leaving every other record's
+    group_header unset. Nothing here decides which records appear or in
+    what order; that's already settled by the time this runs."""
+    raw = result.records
     records = []
-    for r in result.records:
-        lang = r["source_lang"]
-        records.append({
-            "review_id": r["review_id"],
-            "country": r["country"],
-            "rating": r["rating"],
-            "friction_type": r["friction_type"],
-            "text_en": r["text_en"],
-            "body": r["body"],
-            "translated_note": None if lang == "en" else f"translated from {LANGUAGE_NAMES.get(lang, lang)}",
-        })
+    i = 0
+    while i < len(raw):
+        current_app = raw[i]["app"]
+        j = i
+        while j < len(raw) and raw[j]["app"] == current_app:
+            j += 1
+        run_length = j - i
+        short = APP_SHORT_NAMES.get(current_app, current_app)
+        for k in range(i, j):
+            r = raw[k]
+            lang = r["source_lang"]
+            entry = {
+                "review_id": r["review_id"],
+                "country": r["country"],
+                "rating": r["rating"],
+                "friction_type": r["friction_type"],
+                "app_short": short,
+                "text_en": r["text_en"],
+                "body": r["body"],
+                "translated_note": None if lang == "en" else f"translated from {LANGUAGE_NAMES.get(lang, lang)}",
+            }
+            if result.grouped_by_app and k == i:
+                entry["group_header"] = f"{short} — {run_length} review{'s' if run_length != 1 else ''}"
+            records.append(entry)
+        i = j
     return records
 
 
@@ -225,6 +251,17 @@ PAGE = """<!doctype html>
     margin-top: 20px;
   }
 
+  .record-group-header {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 18px 0 8px;
+  }
+
+  .record-group-header:first-child {
+    margin-top: 0;
+  }
+
   .record-block {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -312,7 +349,7 @@ EXAMPLES.forEach((q) => {
   btn.textContent = q;
   btn.addEventListener("click", () => {
     input.value = q;
-    runQuery(q);
+    input.focus();
   });
   exampleList.appendChild(btn);
 });
@@ -336,12 +373,19 @@ function renderResult(data) {
   const recordsEl = document.getElementById("r-records");
   recordsEl.textContent = "";
   records.forEach((r) => {
+    if (r.group_header) {
+      const header = document.createElement("div");
+      header.className = "record-group-header";
+      header.textContent = r.group_header;
+      recordsEl.appendChild(header);
+    }
+
     const block = document.createElement("div");
     block.className = "record-block";
 
     const meta = document.createElement("div");
     meta.className = "record-meta";
-    meta.textContent = `${r.country} · ${r.rating}★ · ${r.review_id} · friction_type=${r.friction_type}`;
+    meta.textContent = `${r.app_short} · ${r.country} · ${r.rating}★ · ${r.review_id} · friction_type=${r.friction_type}`;
     block.appendChild(meta);
 
     const text = document.createElement("div");
