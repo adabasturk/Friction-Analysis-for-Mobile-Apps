@@ -15,7 +15,7 @@ import json
 
 from flask import Flask, jsonify, request
 
-from ask import DB_PATH, OLLAMA_HOST, answer, check_ollama_health
+from ask import DB_PATH, LANGUAGE_NAMES, OLLAMA_HOST, answer, check_ollama_health
 
 app = Flask(__name__)
 
@@ -28,33 +28,28 @@ EXAMPLE_QUESTIONS = [
 ]
 
 
-# Exact strings ask.py's answer() emits - used below to recognize a
-# rejection and a weighted-rate answer without touching ask.py itself.
-# ask.py keeps returning full detail (the threshold, translation note,
-# "n=0 records", full warnings list) for the CLI; this file just
-# doesn't put all of it on screen. Simplification lives here, not there.
-QUALITATIVE_REJECTION_PREFIX = "No data to answer this question"
+# Exact string ask.py's answer() emits for the one QUALITATIVE rejection
+# that still happens before any filtering/ranking (no country/app/field
+# signal at all) - used below without touching ask.py itself. Part 6.5:
+# a filtered-but-empty result is no longer a rejection, it's a pool line
+# reading "0 reviews matched" - handled by result.n == 0 below, not here.
+AIMLESS_REJECTION_TEXT = "This question doesn't point to a specific topic. Name an app, country, or friction type."
 WEIGHTED_RATE_NOTE = "estimation frame, weighted"
 
 
 def display_text(result):
-    """Same rejection, minus the technical parenthetical (similarity
-    score, threshold, filter state) - that detail is for the CLI/debug
-    audience, not this screen."""
-    if result.query_type == "QUALITATIVE" and result.text.startswith(QUALITATIVE_REJECTION_PREFIX):
-        return "No data to answer this question."
     return result.text
 
 
 def footer_note(result):
-    """The one small-print line under the answer, replacing the removed
-    threshold/translation/n=0 detail with something a non-technical reader
-    can use: how many reviews this rests on, in plain words."""
+    """The one small-print line under the answer. For QUALITATIVE the pool
+    line in the main text already states the match count, so this is only
+    needed for the zero-match case and for AGGREGATE's weighted-rate note."""
     if result.query_type == "QUALITATIVE":
-        if result.text.startswith(QUALITATIVE_REJECTION_PREFIX):
-            return "no sufficiently close match found"
-        if result.n:
-            return f"compiled from {result.n} reviews"
+        if result.text == AIMLESS_REJECTION_TEXT:
+            return None
+        if result.n == 0:
+            return "no reviews matched these filters"
         return None
 
     if result.query_type == "AGGREGATE":
@@ -63,6 +58,26 @@ def footer_note(result):
         return None
 
     return None
+
+
+def display_records(result):
+    """result.records, reshaped for the page: a ready-made display note
+    ("translated from Japanese") instead of a raw source_lang code, and
+    only the fields the page actually renders. Full text throughout, by
+    design - no truncation."""
+    records = []
+    for r in result.records:
+        lang = r["source_lang"]
+        records.append({
+            "review_id": r["review_id"],
+            "country": r["country"],
+            "rating": r["rating"],
+            "friction_type": r["friction_type"],
+            "text_en": r["text_en"],
+            "body": r["body"],
+            "translated_note": None if lang == "en" else f"translated from {LANGUAGE_NAMES.get(lang, lang)}",
+        })
+    return records
 
 
 PAGE = """<!doctype html>
@@ -204,22 +219,48 @@ PAGE = """<!doctype html>
     margin-bottom: 14px;
   }
 
-  .field-label {
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-bottom: 4px;
-  }
-
-  .review-ids {
-    font-size: 0.85rem;
-    color: var(--muted);
-    word-break: break-word;
-  }
-
   .footer-note {
     font-size: 0.8rem;
     color: var(--muted);
     margin-top: 20px;
+  }
+
+  .record-block {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+
+  .record-meta {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .record-text {
+    white-space: pre-wrap;
+  }
+
+  .record-lang-note {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  .record-original summary {
+    font-size: 0.75rem;
+    color: var(--accent);
+    cursor: pointer;
+    margin-top: 4px;
+  }
+
+  .record-original div {
+    white-space: pre-wrap;
+    font-size: 0.9rem;
+    color: var(--muted);
+    margin-top: 6px;
   }
 </style>
 </head>
@@ -246,9 +287,8 @@ PAGE = """<!doctype html>
     <div class="query-type" id="r-query-type"></div>
     <div class="answer-text" id="r-text"></div>
 
-    <div class="field" id="r-review-ids-field" hidden>
-      <div class="field-label">kaynak review_id'ler</div>
-      <div class="review-ids" id="r-review-ids"></div>
+    <div class="field" id="r-records-field" hidden>
+      <div id="r-records"></div>
     </div>
 
     <div class="footer-note" id="r-footer" hidden></div>
@@ -287,22 +327,47 @@ function setHidden(id, hidden) {
   document.getElementById(id).hidden = hidden;
 }
 
-function fillList(id, items) {
-  const el = document.getElementById(id);
-  el.textContent = "";
-  items.forEach((item, i) => {
-    if (i > 0) el.appendChild(document.createTextNode(", "));
-    el.appendChild(document.createTextNode(item));
-  });
-}
-
 function renderResult(data) {
   document.getElementById("r-query-type").textContent = data.query_type || "";
   document.getElementById("r-text").textContent = data.text || "";
 
-  const hasReviewIds = data.review_ids && data.review_ids.length > 0;
-  setHidden("r-review-ids-field", !hasReviewIds);
-  if (hasReviewIds) fillList("r-review-ids", data.review_ids);
+  const records = data.records || [];
+  setHidden("r-records-field", records.length === 0);
+  const recordsEl = document.getElementById("r-records");
+  recordsEl.textContent = "";
+  records.forEach((r) => {
+    const block = document.createElement("div");
+    block.className = "record-block";
+
+    const meta = document.createElement("div");
+    meta.className = "record-meta";
+    meta.textContent = `${r.country} · ${r.rating}★ · ${r.review_id} · friction_type=${r.friction_type}`;
+    block.appendChild(meta);
+
+    const text = document.createElement("div");
+    text.className = "record-text";
+    text.textContent = r.text_en;
+    block.appendChild(text);
+
+    if (r.translated_note) {
+      const note = document.createElement("div");
+      note.className = "record-lang-note";
+      note.textContent = r.translated_note;
+      block.appendChild(note);
+
+      const details = document.createElement("details");
+      details.className = "record-original";
+      const summary = document.createElement("summary");
+      summary.textContent = "show original";
+      const original = document.createElement("div");
+      original.textContent = r.body;
+      details.appendChild(summary);
+      details.appendChild(original);
+      block.appendChild(details);
+    }
+
+    recordsEl.appendChild(block);
+  });
 
   const hasFooter = !!data.footer_note;
   setHidden("r-footer", !hasFooter);
@@ -326,7 +391,7 @@ async function runQuery(question) {
     loading.hidden = true;
 
     if (!resp.ok) {
-      errorBox.textContent = data.error || "Bilinmeyen hata";
+      errorBox.textContent = data.error || "Unknown error";
       errorBox.hidden = false;
       return;
     }
@@ -364,7 +429,7 @@ def ask_endpoint():
         {
             "query_type": result.query_type,
             "text": display_text(result),
-            "review_ids": result.review_ids,
+            "records": display_records(result),
             "footer_note": footer_note(result),
         }
     )

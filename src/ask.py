@@ -36,6 +36,10 @@ EMBED_MODEL = "nomic-embed-text"
 QUALITATIVE_TOP_K = 15
 MIN_MATCHES_WARN = 5
 
+# Part 6.5: how many ranked records a QUALITATIVE answer shows at most, out
+# of however many matched the detected filters (see answer_qualitative).
+QUALITATIVE_TOP_K_RESULTS = 25
+
 # Calibrated against probe questions run on this exact corpus, not guessed:
 # on-topic questions (about prices/cancellation, in Turkish and English) scored
 # nearest-neighbor cosine 0.72-0.83; generic off-topic questions in a language
@@ -302,34 +306,6 @@ Output ONLY corrected JSON: {{"sql": "<a single SELECT statement, no trailing se
 
 JSON:"""
 
-QUALITATIVE_SYNTH_TEMPLATE = """Below are up to {k} real app store reviews retrieved for a question. \
-Answer the question using ONLY what these reviews say. When a claim comes from \
-a specific review, say which app that review is about (e.g. "a Nova user \
-says...", "in a Chat AI review...") instead of citing an ID or number. Never \
-write a bracketed identifier, a review number, or anything like [12345] - app \
-names are how a claim is attributed here. If these reviews don't actually \
-address the question, say so plainly instead of guessing. Never invent facts, \
-numbers, or reviews beyond what's given below.
-
-Write your answer in the SAME LANGUAGE as the question. When you quote a \
-review that is in a different language than the question, either quote it \
-ENTIRELY in its original language, or translate it ENTIRELY - never mix the \
-two within one quote (e.g. do not leave one word or phrase untranslated \
-inside an otherwise-translated sentence).
-
-Never use a vague-majority word ("many", "most", "often", or equivalents in \
-the question's language) unless at least THREE of the reviews given below \
-literally support that claim. If only one review supports a claim, say "a \
-user" (in the question's language); if two, say "two users"; only at three \
-or more, say "many"/"most"/"often".
-
-Reviews:
-{context}
-
-Question: \"\"\"{question}\"\"\"
-
-Answer (attribute claims by app name, never by ID, in the question's language):"""
-
 # Mechanical country -> language mapping, used only when a country filter is
 # active: lowering the similarity threshold (MIN_TOP1_SIMILARITY_COUNTRY_
 # FILTERED) fixed the case where the pool was already language-matched
@@ -354,6 +330,26 @@ COUNTRY_LANGUAGE = {
     "us": "English",
     "gb": "English",
     "in": "English",
+}
+
+# ISO 639-1 -> full English name, for translations.source_lang (the actual
+# language Claude detected per review while translating by hand - see
+# README - not the country-proxy mapping above). Covers every code that
+# shows up in the translated pool; add to this, don't guess, if a future
+# translation pass introduces a new one.
+LANGUAGE_NAMES = {
+    "en": "English",
+    "pt": "Portuguese",
+    "de": "German",
+    "fr": "French",
+    "tr": "Turkish",
+    "ja": "Japanese",
+    "es": "Spanish",
+    "ar": "Arabic",
+    "zh": "Chinese",
+    "ru": "Russian",
+    "ro": "Romanian",
+    "hi": "Hindi",
 }
 
 TRANSLATE_TEMPLATE = """Translate the text below into {language}. Output ONLY the translation - no quotes, no explanation, no original text, nothing else.
@@ -388,14 +384,39 @@ FANOUT_LANGUAGES = ["English", "Portuguese", "German", "French", "Japanese"]
 # a word review authors use about themselves. Single words are PREFIX
 # matched (Turkish suffixes - same class of fix as AGGREGATE_PREFIX_
 # KEYWORDS); phrases are substring matched.
+#
+# would_pay_signal rows expanded after "Neredeyse ödeme yapacak olan
+# Brezilyalı kullanıcılar neden caydı" matched no rule at all (only the
+# country filter applied) - "neden caydı" names the exact same
+# near-payment-then-backed-out idea as "vazgeç", just with a different
+# verb. friction_type rows for performance/onboarding_confusion below are
+# new entries (previously uncovered by any rule at all), drawn from
+# phrasing seen repeatedly in the translated review corpus itself (Part
+# 6.5), not invented - "sunucu meşgul"/"sunucular meşgul" ("servers busy")
+# in particular recurs verbatim across many Turkish reviews.
 FIELD_KEYWORD_RULES = [
-    (["ödemeye yakın", "vazgeç", "ikna olsa öderdi"], "would_pay_signal", "conditional"),
-    (["ödemem diyen", "asla ödemem"], "would_pay_signal", "no"),
-    (["iptal", "abonelik tuzağı", "deneme"], "friction_type", "subscription_trap"),
-    (["paywall", "ne zaman çıkıyor"], "friction_type", "paywall_timing"),
-    (["kota", "limit", "günlük hak"], "friction_type", "free_quota_limit"),
-    (["pahalı", "fiyat"], "friction_type", "price_level"),
-    (["arkadaş davet", "referans"], "friction_type", "referral_gate"),
+    (
+        [
+            "ödemeye yakın", "vazgeç", "ikna olsa öderdi", "ikna olsa",
+            "caydı", "cayma", "ödeyecektim", "neredeyse ödeyecek",
+            "bir şey olsa öderdi",
+        ],
+        "would_pay_signal", "conditional",
+    ),
+    (
+        ["ödemem diyen", "asla ödemem", "ödemem", "para vermem", "bedava olmalı"],
+        "would_pay_signal", "no",
+    ),
+    (
+        ["iptal", "abonelik tuzağı", "deneme", "otomatik yenile", "fark etmeden", "bilgim dışında", "izinsiz"],
+        "friction_type", "subscription_trap",
+    ),
+    (["paywall", "ne zaman çıkıyor", "daha denemeden", "açar açmaz"], "friction_type", "paywall_timing"),
+    (["kota", "limit", "günlük hak", "soru hakkı", "mesaj hakkı"], "friction_type", "free_quota_limit"),
+    (["pahalı", "fiyat", "ücret yüksek", "fiyatı yüksek"], "friction_type", "price_level"),
+    (["arkadaş davet", "referans", "davet et", "arkadaşını davet"], "friction_type", "referral_gate"),
+    (["sunucu meşgul", "sunucular meşgul", "yavaş çalış", "çöküyor"], "friction_type", "performance"),
+    (["nasıl kullanılacağını", "kullanımı karışık", "arayüz karışık"], "friction_type", "onboarding_confusion"),
 ]
 
 
@@ -466,16 +487,6 @@ def is_aimless_question(question):
     return any(phrase in normalized for phrase in AIMLESS_PHRASES)
 
 
-def has_excessive_repetition(text, max_repeats=3):
-    """A model producing the same sentence four-plus times is a failure
-    mode, not a finding worth reporting - caught empirically: an aimless
-    question that slipped through produced the same sentence nine times.
-    This is a second, independent backstop behind is_aimless_question."""
-    sentences = re.split(r"[.!?\n]+", text)
-    counts = Counter(s.strip().lower() for s in sentences if len(s.strip()) > 8)
-    return any(count > max_repeats for count in counts.values())
-
-
 @dataclass
 class Answer:
     query_type: str  # "AGGREGATE" | "QUALITATIVE"
@@ -488,9 +499,15 @@ class Answer:
                                      # `text` is the human-readable (e.g. percentage)
                                      # rendering; this is the real value underneath it.
     country_distribution: dict | None = None
-    field_filter: dict | None = None  # {"field": "would_pay_signal", "value": "conditional",
-                                       # "pool_size": 155} - set only when a qualitative
-                                       # question matched a FIELD_KEYWORD_RULES entry.
+    records: list = field(default_factory=list)  # Part 6.5: [{"review_id", "text_en", "body",
+                                                   # "country", "rating", "app", "friction_type",
+                                                   # "would_pay_signal"}, ...] - the ranked,
+                                                   # filtered records a QUALITATIVE question
+                                                   # returns. No generated summary sentence and
+                                                   # no live translation call for this path
+                                                   # (see answer_qualitative) - every review in
+                                                   # the pool was translated once, by hand,
+                                                   # ahead of time (see README).
     warnings: list = field(default_factory=list)
 
 
@@ -770,6 +787,24 @@ def mentions_rating(normalized):
 
 def mentions_app(normalized):
     return any(alias in normalized for alias in APP_ALIASES)
+
+
+def matched_app(normalized):
+    """The canonical app name the question names, or None. Distinct from
+    mentions_app (which only says yes/no) - cell-key lookup needs to know
+    WHICH app, not just that one was mentioned."""
+    for alias, app in APP_ALIASES.items():
+        if alias in normalized:
+            return app
+    return None
+
+
+APP_TO_PAIR = {
+    "Chat AI: Ask Agent Anything": "chatbot",
+    "AI Chatbot - Nova": "chatbot",
+    "Retake AI Face & Selfie Editor": "face",
+    "ReShoot: AI Face Photo Editor": "face",
+}
 
 
 def mentions_date(normalized):
@@ -1250,153 +1285,185 @@ def load_corpus(conn, country=None, field_filter=None):
     return review_ids, norm_vectors, bodies, countries, ratings, apps
 
 
-def build_synth_prompt(question, context):
-    return QUALITATIVE_SYNTH_TEMPLATE.format(k=QUALITATIVE_TOP_K, context=context, question=question)
+# ---------------------------------------------------------------------------
+# Part 6.5: raw filtered + ranked listing over the English translation pool
+# ---------------------------------------------------------------------------
+#
+# Summary generation, the summaries-table lookup, and the "precomputed"
+# badge are gone (see README) - live synthesis on gemma3:4b was too slow
+# for interactive use, and a one-sentence summary carries less than the
+# reviews themselves. Text questions now search only the translations/
+# embeddings_en pool: every valid extraction's review body, translated to
+# English once by hand (translations.translated_by='claude' - see README),
+# then embedded with nomic-embed-text (src/embed.py --english) so the pool
+# is monolingual. The country-pre-filter-then-multilingual-fanout machinery
+# just above (load_corpus, FANOUT_LANGUAGES, COUNTRY_LANGUAGE, the two
+# similarity thresholds) is no longer called from this path - kept in
+# place, not deleted, since it is exactly what this project would need
+# again if the qualitative pool ever goes back to being multilingual.
+#
+# translate_query IS still called from here, just always toward English
+# now instead of toward whatever language a named country implied: the
+# pool is English-only, so a non-English question has to be translated
+# before embedding or the match degrades (measured: a Turkish question
+# embedded directly against the English pool ranked generic positive
+# reviews above the on-topic ones - cross-lingual similarity alone wasn't
+# enough, contrary to the initial assumption that a monolingual pool would
+# make translation unnecessary).
+
+
+def is_likely_english(question):
+    """Cheap, no-LLM heuristic: True when the question has no non-ASCII
+    character. Every real question in this system is typed in Turkish or
+    English, and Turkish all but always uses at least one of ğ/ı/ş/ç/ö/ü -
+    so a pure-ASCII question is treated as already English and the
+    translation call below is skipped for it."""
+    return question.isascii()
+
+
+def detect_text_filters(question):
+    """(country, app, field_name, field_value) detected in the question,
+    each None when not matched. Reuses the exact same detectors as the
+    AGGREGATE path and the rest of this module (detect_countries,
+    matched_app, detect_structured_field) - the question is parsed once,
+    not by a second parser. More than one country named is treated as no
+    country filter, the same ambiguity convention used everywhere else in
+    this file."""
+    normalized = _normalize_for_match(question)
+    countries = detect_countries(question)
+    country = next(iter(countries)) if len(countries) == 1 else None
+    app = matched_app(normalized)
+    field = detect_structured_field(question)
+    field_name, field_value = field if field else (None, None)
+    return country, app, field_name, field_value
+
+
+def load_text_pool(conn, country, app, field_name, field_value):
+    """Every translated, embedded review matching the detected filters,
+    AND'ed together. translations only ever holds review_ids from valid
+    extractions (see README), so no separate validation_status check is
+    needed on top of that join. field_name is never user-supplied text -
+    it only ever comes from FIELD_KEYWORD_RULES, a fixed constant in this
+    file - so interpolating it into the query is not an injection risk."""
+    query = """
+        SELECT t.review_id, t.text_en, t.source_lang, r.body, r.country, r.rating, r.app,
+               e.friction_type, e.would_pay_signal, em.vector
+        FROM translations t
+        JOIN reviews r ON r.review_id = t.review_id
+        JOIN extractions e ON e.review_id = t.review_id
+        JOIN embeddings_en em ON em.review_id = t.review_id
+    """
+    conditions = []
+    params = []
+    if country:
+        conditions.append("r.country = ?")
+        params.append(country)
+    if app:
+        conditions.append("r.app = ?")
+        params.append(app)
+    if field_name:
+        conditions.append(f"e.{field_name} = ?")
+        params.append(field_value)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    return conn.execute(query, params).fetchall()
+
+
+def pool_totals(conn):
+    """(translated pool size, full substantive-review count) - always real
+    SQL counts, never hardcoded, so the pool line stays correct as both
+    tables grow."""
+    total_pool = conn.execute("SELECT COUNT(*) FROM translations").fetchone()[0]
+    total_substantive = conn.execute("SELECT COUNT(*) FROM reviews WHERE is_substantive = 1").fetchone()[0]
+    return total_pool, total_substantive
 
 
 def answer_qualitative(question, host, db_path, debug=False):
-    matched_countries = detect_countries(question)
-    country_filter = None
+    country, app, field_name, field_value = detect_text_filters(question)
     warnings = []
 
-    if len(matched_countries) == 1:
-        country_filter = next(iter(matched_countries))
-    elif len(matched_countries) > 1:
-        warnings.append(
-            f"question names more than one country/market ({', '.join(sorted(matched_countries))}) "
-            "- no filter applied, searched the whole corpus"
-        )
+    # One line, always present, right above the pool line - so the user
+    # can see at a glance whether what they asked actually matched a
+    # filter, not just trust that it did.
+    active_filters = []
+    if country:
+        active_filters.append(f"country={country}")
+    if app:
+        active_filters.append(f"app={app}")
+    if field_name:
+        active_filters.append(f"{field_name}={field_value}")
+    filters_line = "filters: " + (", ".join(active_filters) if active_filters else "none")
 
-    field_filter = detect_structured_field(question)
+    if country:
+        warnings.append(f"country filter: {country}")
+    if app:
+        warnings.append(f"app filter: {app}")
+    if field_name:
+        warnings.append(f"field filter: {field_name}='{field_value}'")
 
     conn = get_connection(db_path)
     try:
-        review_ids, norm_vectors, bodies, countries, ratings, apps = load_corpus(
-            conn, country=country_filter, field_filter=field_filter
-        )
+        rows = load_text_pool(conn, country, app, field_name, field_value)
+        total_pool, total_substantive = pool_totals(conn)
     finally:
         conn.close()
 
-    pool_size = len(review_ids)
-    if country_filter:
-        threshold = MIN_TOP1_SIMILARITY_COUNTRY_FILTERED
-        threshold_note = f"threshold {threshold} - country filter active"
-    else:
-        threshold = MIN_TOP1_SIMILARITY_DEFAULT
-        threshold_note = f"threshold {threshold} - no country filter"
-
-    if country_filter and country_filter != "tr":
-        # Filtering the pool to one country doesn't fix a query written in
-        # a different language than that country's reviews (measured:
-        # Brazil stayed at top1=0.51 even after country=br filtering - the
-        # pool was right, the query's language wasn't).
-        target_language = COUNTRY_LANGUAGE[country_filter]
-        translated = translate_query(question, target_language, host)
-        search_texts = [translated]
-        warnings.append(f"query translated to {target_language}: '{translated}'")
-    elif country_filter == "tr":
-        search_texts = [question]
-    else:
-        # No country named -> a single embedding only ever reaches reviews
-        # in whatever language the question itself was written in
-        # (measured: a Turkish question with no country name scored 100%
-        # tr in its top 15, regardless of topic). Fan out across the
-        # corpus's other major languages and merge by best score instead.
-        translations = [translate_query(question, lang, host) for lang in FANOUT_LANGUAGES]
-        search_texts = [question] + translations
-        if debug:
-            print(f"[debug] fanout translations: {translations}\n")
-
-    query_vectors = embed_texts(search_texts, host)
-    sims = (norm_vectors @ query_vectors.T).max(axis=1)  # best score across variants, per review
-
-    k = min(QUALITATIVE_TOP_K, pool_size)
-    top_idx = np.argsort(-sims)[:k]
-    top_sims = sims[top_idx]
-    top1_sim = float(top_sims[0])
-    n_matches = len(top_idx)
+    matched = len(rows)
+    pool_line = (
+        f"{matched} reviews matched — from {total_pool} extracted records "
+        f"({total_substantive} substantive reviews total)"
+    )
 
     if debug:
-        print(
-            f"[debug] country_filter={country_filter} field_filter={field_filter} pool={pool_size} "
-            f"n_variants={len(search_texts)} top1={top1_sim:.3f} top15_mean={float(top_sims.mean()):.3f} "
-            f"threshold={threshold}\n"
-        )
+        print(f"[debug] filters: country={country} app={app} field={field_name}={field_value}")
+        print(f"[debug] {matched} rows matched before ranking\n")
 
-    country_counts = Counter(countries[i] for i in top_idx)
-    country_dist = {
-        c: {"n": cnt, "pct": round(100 * cnt / n_matches, 1)} for c, cnt in country_counts.items()
-    }
+    if matched == 0:
+        return Answer(query_type="QUALITATIVE", text=f"{filters_line}\n{pool_line}", n=0, warnings=warnings)
 
-    if country_filter:
-        # Country named and matched -> pool pre-filtered before similarity
-        # ran, so a Turkish-phrased question about Japan actually reaches
-        # Japanese reviews instead of the nearest Turkish ones.
-        warnings.append(
-            f"restricted to country={country_filter}, {pool_size}-record pool "
-            "(reviews table has no separate language column, country used as a proxy for language)"
-        )
+    vectors = np.stack([np.frombuffer(r[9], dtype=np.float32) for r in rows])
+    norm_vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    # The pool is English-only (see module note above), so a non-English
+    # question has to be translated to English before embedding, or the
+    # match degrades - skip the call only when the question is already
+    # English (is_likely_english), the same reuse of translate_query the
+    # multilingual path above used, just always toward English now.
+    if is_likely_english(question):
+        search_text = question
     else:
-        warnings.append(
-            "no country named: query translated into 5 languages and searched separately in each, "
-            "results merged by best score (nomic-embed-text encodes language before topic in a "
-            "multilingual corpus - searching in one language alone would lock results into the "
-            "question's own language); see the country distribution below"
-        )
+        search_text = translate_query(question, "English", host)
+        warnings.append(f"query translated to English: '{search_text}'")
 
-    field_filter_info = None
-    if field_filter:
-        field_name, field_value = field_filter
-        field_filter_info = {"field": field_name, "value": field_value, "pool_size": pool_size}
-        warnings.append(f"field filter: restricted to {field_name}='{field_value}', {pool_size}-record pool")
+    query_vector = embed_text(search_text, host)
+    sims = norm_vectors @ query_vector
+    order = np.argsort(-sims)[:QUALITATIVE_TOP_K_RESULTS]
 
-    # Threshold used is always shown, not just on refusal - which gate
-    # applied is as much a part of the answer as the answer itself.
-    warnings.append(threshold_note)
+    records = []
+    for i in order:
+        review_id, text_en, source_lang, body, r_country, rating, r_app, friction_type, would_pay_signal, _vec = rows[i]
+        records.append({
+            "review_id": review_id,
+            "text_en": text_en,
+            "source_lang": source_lang,
+            "body": body,
+            "country": r_country,
+            "rating": rating,
+            "app": r_app,
+            "friction_type": friction_type,
+            "would_pay_signal": would_pay_signal,
+        })
 
-    if top1_sim < threshold:
-        return Answer(
-            query_type="QUALITATIVE",
-            text=(
-                f"No data to answer this question (nearest record's similarity score "
-                f"{top1_sim:.2f}, {threshold_note})."
-            ),
-            n=0,
-            country_distribution=country_dist,
-            field_filter=field_filter_info,
-            warnings=warnings,
-        )
-
-    if n_matches < MIN_MATCHES_WARN:
-        warnings.append(f"result rests on fewer than {MIN_MATCHES_WARN} records (n={n_matches})")
-
-    # No review_id in what the model sees - it can't cite what it never
-    # received. The real ids still travel separately in Answer.review_ids
-    # for traceability; app is what the model attributes claims to instead.
-    context = "\n".join(
-        f"(app={apps[i]}, country={countries[i]}, rating={ratings[i]}) "
-        f"{(bodies[i] or '').strip().replace(chr(10), ' ')}"
-        for i in top_idx
-    )
-    raw = call_ollama_text(build_synth_prompt(question, context), host).strip()
-
-    if has_excessive_repetition(raw):
-        return Answer(
-            query_type="QUALITATIVE",
-            text="The model produced the same sentence over and over; that's a generation failure, not a finding - not shown.",
-            n=0,
-            country_distribution=country_dist,
-            field_filter=field_filter_info,
-            warnings=warnings + ["synthesis output rejected: excessive repetition detected"],
-        )
+    text = f"{filters_line}\n{pool_line}"
+    if matched > QUALITATIVE_TOP_K_RESULTS:
+        text += f"\nShowing {QUALITATIVE_TOP_K_RESULTS} of {matched}."
 
     return Answer(
         query_type="QUALITATIVE",
-        text=raw,
-        review_ids=[review_ids[i] for i in top_idx],
-        n=n_matches,
-        country_distribution=country_dist,
-        field_filter=field_filter_info,
+        text=text,
+        review_ids=[r["review_id"] for r in records],
+        n=matched,
+        records=records,
         warnings=warnings,
     )
 
@@ -1442,7 +1509,22 @@ def answer(question, host=OLLAMA_HOST, db_path=DB_PATH, debug=False):
 
 def print_answer(result):
     print(f"[{result.query_type}]\n")
-    print(result.text)
+    # text holds the pool line (+ "Showing N of M.") for QUALITATIVE, or
+    # AGGREGATE's formatted result / a rejection message.
+    if result.text:
+        print(result.text)
+
+    if result.records:
+        print("\nrecords:")
+        for r in result.records:
+            print(
+                f"\n  [{r['country']} · {r['rating']}★ · {r['review_id']} · "
+                f"friction_type={r['friction_type']} · would_pay_signal={r['would_pay_signal']}]"
+            )
+            print(f"  {r['text_en']}")
+            if r["source_lang"] != "en":
+                lang = LANGUAGE_NAMES.get(r["source_lang"], r["source_lang"])
+                print(f"  (translated from {lang}: {r['body']})")
 
     if result.n is not None:
         print(f"\nn={result.n} records")
@@ -1450,7 +1532,7 @@ def print_answer(result):
     if result.sql:
         print(f"\nSQL:\n{result.sql}")
 
-    if result.review_ids:
+    if result.review_ids and not result.records:
         print(f"\nsource review_ids: {', '.join(result.review_ids)}")
 
     if result.country_distribution:

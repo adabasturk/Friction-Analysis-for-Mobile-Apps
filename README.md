@@ -27,7 +27,13 @@ Full write-up, method and limitations: [FINDINGS.md](FINDINGS.md)
 
 ## Query layer
 
-Flask UI plus a CLI (`src/ask.py`). Numeric questions are routed to generated SQL; open-ended questions go to semantic search. Rate queries are restricted to the stratified estimation frame and weighted accordingly, and the generated SQL is always shown back to the user. For multilingual search, the query is translated into the target market's language before it's embedded, since semantic search otherwise stays locked to the question's own language.
+Flask UI plus a CLI (`src/ask.py`). Numeric questions are routed to live-generated SQL, always shown back to the user, with rate queries restricted to the stratified estimation frame and weighted accordingly.
+
+Text questions no longer get a generated summary at all — gemma3:4b was too slow for live synthesis, and a one-sentence summary carries less than the reviews themselves. Instead, the question is turned into a filter (country / app / friction type or would-pay signal, reusing the same keyword detectors as the SQL path), the filtered pool is ranked by semantic similarity, and the top 25 matching reviews are returned as-is — original text, English translation, country, star rating, `review_id`, `friction_type`, `would_pay_signal` — with the match count always shown against the full pool size (`N reviews matched — from 1,022 extracted records (6,961 substantive reviews total)`).
+
+That pool is `translations` + `embeddings_en`: every valid extraction's review body translated to English once, by hand (`translated_by='claude'`), ahead of time, then embedded with `nomic-embed-text` via `python src/embed.py --english`. A non-English question is translated to English with a single live call (reusing the project's existing translation mechanism, just always targeting English now — skipped when the question is already English) before it's embedded and ranked against that pool; embedding a non-English question directly against the English-only pool was tried first and ranked generic positive reviews above on-topic ones, so the translation call stays. The project's older multilingual search path (per-query translation toward a country's own language, country-language fan-out) is still in `src/ask.py`, just no longer called from here.
+
+Every QUALITATIVE answer also opens with a `filters: ...` line naming exactly which country/app/friction-type/would-pay-signal filter was detected (or `filters: none`), so a mismatch between what was asked and what was matched is visible immediately rather than discovered by reading the records.
 
 ## Setup
 
@@ -41,6 +47,9 @@ python src/sample.py                     # select the stratified + purposive ext
 python src/extract.py --frame all        # run structured LLM extraction (long-running)
 python src/analyze.py                    # compute weighted rates, CIs, charts, observations.csv
 python src/hypotheses.py --engine ollama # generate A/B test hypotheses from observations.csv
+#   (translations table: every valid extraction's review body translated to English by
+#   hand, not by a script - see "Query layer" above; translated_by='claude' in the DB)
+python src/embed.py --english            # embed translations.text_en (the query layer's qualitative pool)
 python src/ask.py "your question"        # or: python src/web.py, for the browser UI
 ```
 

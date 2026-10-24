@@ -8,10 +8,16 @@ skipping reviews that already have an embedding so an interrupted run
 resumes cleanly. Also exports the full embedding matrix to
 data/embeddings.npy (with a parallel data/embeddings_ids.npy) once done.
 
+--english embeds translations.text_en instead (the 1,022-record qualitative-
+answer pool from Part 6.5, text translated to English by hand - see
+README) and writes to embeddings_en, so the pool's semantic search runs
+over one language instead of the original multilingual bodies.
+
 Usage:
     python src/embed.py
     python src/embed.py --limit 200      # test run
     python src/embed.py --batch-size 50
+    python src/embed.py --english        # embed translations.text_en instead
 """
 
 import argparse
@@ -42,6 +48,19 @@ def fetch_pending(conn, limit=None):
     return conn.execute(query).fetchall()
 
 
+def fetch_pending_en(conn, limit=None):
+    query = """
+        SELECT t.review_id, t.text_en
+        FROM translations t
+        LEFT JOIN embeddings_en e ON e.review_id = t.review_id
+        WHERE e.review_id IS NULL
+        ORDER BY t.review_id
+    """
+    if limit:
+        query += f" LIMIT {int(limit)}"
+    return conn.execute(query).fetchall()
+
+
 def embed_batch(texts, host, timeout=120):
     resp = requests.post(
         f"{host}/api/embed", json={"model": MODEL, "input": texts}, timeout=timeout
@@ -50,13 +69,13 @@ def embed_batch(texts, host, timeout=120):
     return resp.json()["embeddings"]
 
 
-def write_batch(conn, review_ids, vectors):
+def write_batch(conn, review_ids, vectors, table="embeddings"):
     rows = [
         (review_id, np.asarray(vec, dtype=np.float32).tobytes())
         for review_id, vec in zip(review_ids, vectors)
     ]
     conn.executemany(
-        "INSERT OR REPLACE INTO embeddings (review_id, vector) VALUES (?, ?)", rows
+        f"INSERT OR REPLACE INTO {table} (review_id, vector) VALUES (?, ?)", rows
     )
     conn.commit()
 
@@ -83,13 +102,21 @@ def main():
         help="only embed the first N pending reviews — for test runs",
     )
     parser.add_argument("--host", default=OLLAMA_HOST)
+    parser.add_argument(
+        "--english",
+        action="store_true",
+        help="embed translations.text_en into embeddings_en instead of reviews.body into embeddings",
+    )
     args = parser.parse_args()
 
     conn = get_connection(args.db)
-    pending = fetch_pending(conn, args.limit)
+    table = "embeddings_en" if args.english else "embeddings"
+    pending = fetch_pending_en(conn, args.limit) if args.english else fetch_pending(conn, args.limit)
 
     if not pending:
-        print("nothing to embed — all substantive reviews already have vectors")
+        label = "translated reviews already have embedding_en vectors" if args.english \
+            else "substantive reviews already have vectors"
+        print(f"nothing to embed — all {label}")
     else:
         failed = 0
         with tqdm(total=len(pending), desc="embedding") as pbar:
@@ -105,12 +132,13 @@ def main():
                     pbar.update(len(batch))
                     continue
 
-                write_batch(conn, review_ids, vectors)
+                write_batch(conn, review_ids, vectors, table=table)
                 pbar.update(len(batch))
 
         print(f"\ndone: {len(pending) - failed} embedded, {failed} failed")
 
-    export_npy(conn)
+    if not args.english:
+        export_npy(conn)
     conn.close()
 
 

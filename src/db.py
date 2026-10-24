@@ -92,6 +92,30 @@ CREATE TABLE IF NOT EXISTS embeddings (
     review_id TEXT PRIMARY KEY REFERENCES reviews(review_id),
     vector BLOB
 );
+
+-- One row per review_id in extractions (validation_status='valid'): the
+-- body translated to English. Replaces the live per-query translation
+-- calls ask.py used to make on gemma3:4b - every review in the qualitative
+-- pool is translated once, ahead of time, so the pool is monolingual and
+-- search/display never calls a translation model interactively. Populated
+-- by hand (translated_by='claude'), not by a batch script - see README.
+CREATE TABLE IF NOT EXISTS translations (
+    review_id TEXT PRIMARY KEY REFERENCES reviews(review_id),
+    text_en TEXT,
+    source_lang TEXT,
+    translated_at TEXT,
+    translated_by TEXT
+);
+
+-- Embeddings of translations.text_en (nomic-embed-text), kept separate from
+-- `embeddings` (which holds vectors over the original, multilingual body
+-- text) because the two serve different searches: `embeddings` is the full
+-- 6,961-review substantive corpus in its original language, embedding_en is
+-- the English-translated 1,022-review qualitative-answer pool.
+CREATE TABLE IF NOT EXISTS embeddings_en (
+    review_id TEXT PRIMARY KEY REFERENCES translations(review_id),
+    vector BLOB
+);
 """
 
 
