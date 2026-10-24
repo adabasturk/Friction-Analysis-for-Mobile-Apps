@@ -20,11 +20,11 @@ from ask import DB_PATH, LANGUAGE_NAMES, OLLAMA_HOST, answer, check_ollama_healt
 app = Flask(__name__)
 
 EXAMPLE_QUESTIONS = [
-    "Codeway'in CEO'su kim?",
-    "Nova'nın paywall şikâyeti oranı nedir?",
-    "kaç yorum topladın?",
-    "Brezilyalı kullanıcılar fiyat hakkında ne diyor",
-    "Japon kullanıcılar iptal hakkında ne diyor",
+    "Who is Codeway's CEO?",
+    "What is Nova's paywall complaint rate?",
+    "How many reviews did you collect?",
+    "What do Brazilian users say about pricing?",
+    "Why did Brazilian users who almost paid change their mind?",
 ]
 
 

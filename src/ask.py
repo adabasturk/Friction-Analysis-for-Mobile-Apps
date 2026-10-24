@@ -394,27 +394,50 @@ FANOUT_LANGUAGES = ["English", "Portuguese", "German", "French", "Japanese"]
 # phrasing seen repeatedly in the translated review corpus itself (Part
 # 6.5), not invented - "sunucu meşgul"/"sunucular meşgul" ("servers busy")
 # in particular recurs verbatim across many Turkish reviews.
+#
+# English keywords added alongside every Turkish one (never replacing
+# them) once the interface itself went English-only - a question can
+# still be asked in either language and hit the same rule.
 FIELD_KEYWORD_RULES = [
     (
         [
             "ödemeye yakın", "vazgeç", "ikna olsa öderdi", "ikna olsa",
             "caydı", "cayma", "ödeyecektim", "neredeyse ödeyecek",
             "bir şey olsa öderdi",
+            "almost paid", "would have paid", "changed my mind", "changed their mind",
         ],
         "would_pay_signal", "conditional",
     ),
     (
-        ["ödemem diyen", "asla ödemem", "ödemem", "para vermem", "bedava olmalı"],
+        [
+            "ödemem diyen", "asla ödemem", "ödemem", "para vermem", "bedava olmalı",
+            "i will never pay", "i'd never pay", "won't pay", "wont pay",
+        ],
         "would_pay_signal", "no",
     ),
     (
-        ["iptal", "abonelik tuzağı", "deneme", "otomatik yenile", "fark etmeden", "bilgim dışında", "izinsiz"],
+        [
+            "iptal", "abonelik tuzağı", "deneme", "otomatik yenile", "fark etmeden", "bilgim dışında", "izinsiz",
+            "cancel", "subscription", "refund",
+        ],
         "friction_type", "subscription_trap",
     ),
-    (["paywall", "ne zaman çıkıyor", "daha denemeden", "açar açmaz"], "friction_type", "paywall_timing"),
-    (["kota", "limit", "günlük hak", "soru hakkı", "mesaj hakkı"], "friction_type", "free_quota_limit"),
-    (["pahalı", "fiyat", "ücret yüksek", "fiyatı yüksek"], "friction_type", "price_level"),
-    (["arkadaş davet", "referans", "davet et", "arkadaşını davet"], "friction_type", "referral_gate"),
+    (
+        ["paywall", "ne zaman çıkıyor", "daha denemeden", "açar açmaz", "when does it ask"],
+        "friction_type", "paywall_timing",
+    ),
+    (
+        ["kota", "limit", "günlük hak", "soru hakkı", "mesaj hakkı", "quota", "daily"],
+        "friction_type", "free_quota_limit",
+    ),
+    (
+        ["pahalı", "fiyat", "ücret yüksek", "fiyatı yüksek", "expensive", "pric", "cost"],
+        "friction_type", "price_level",
+    ),
+    (
+        ["arkadaş davet", "referans", "davet et", "arkadaşını davet", "invite", "refer", "friends"],
+        "friction_type", "referral_gate",
+    ),
     (["sunucu meşgul", "sunucular meşgul", "yavaş çalış", "çöküyor"], "friction_type", "performance"),
     (["nasıl kullanılacağını", "kullanımı karışık", "arayüz karışık"], "friction_type", "onboarding_confusion"),
 ]
